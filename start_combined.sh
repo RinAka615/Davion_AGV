@@ -45,10 +45,17 @@ fi
 if [ -n "$PYQT5_PLUGINS" ] && [ -d "$PYQT5_PLUGINS" ]; then
     export QT_QPA_PLATFORM_PLUGIN_PATH="$PYQT5_PLUGINS"
 fi
-if [ -z "$QT_QPA_PLATFORM" ]; then
+# Tự động tối ưu nền tảng đồ họa hiển thị trên Linux (Wayland / X11)
+if [ "$XDG_SESSION_TYPE" = "wayland" ] && [ -z "$QT_QPA_PLATFORM" ]; then
     export QT_QPA_PLATFORM="wayland;xcb"
 fi
 export QT_LOGGING_RULES="*.warning=false"
+
+# Cấu hình số luồng CPU an toàn nguồn Pi 5
+export OMP_NUM_THREADS=${OMP_NUM_THREADS:-2}
+export MKL_NUM_THREADS=${MKL_NUM_THREADS:-2}
+export OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-2}
+export TORCH_NUM_THREADS=${TORCH_NUM_THREADS:-2}
 
 # 2. Xử lý tham số truyền vào hoặc chọn video mẫu nhà màng
 if [ $# -gt 0 ]; then

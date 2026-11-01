@@ -237,6 +237,9 @@ class CombinedRobotApp(QMainWindow):
 
     def _load_best_yolo_model(self):
         models = [
+            os.path.join(CURRENT_DIR, "models", "nhamang_pico_seg_ncnn_model"),
+            os.path.join(CURRENT_DIR, "models", "nhamang_batden_seg_ncnn_model"),
+            os.path.join(CURRENT_DIR, "models", "nhamang_pico_seg.pt"),
             os.path.join(CURRENT_DIR, "models", "nhamang_batden_seg.pt"),
             os.path.join(CURRENT_DIR, "models", "farm_path_bootstrap.pt"),
             os.path.join(CURRENT_DIR, "models", "thamden_seg.pt")
@@ -245,7 +248,7 @@ class CombinedRobotApp(QMainWindow):
             if os.path.exists(m):
                 success = self.yolo.load_model(m, device=self.device)
                 if success:
-                    print(f"[COMBINED APP] Đã nạp thành công model YOLO ({self.device}): {os.path.basename(m)}")
+                    print(f"[COMBINED APP] Đã nạp thành công model YOLO ({self.yolo.device_display_name}): {os.path.basename(m)}")
                     break
 
     def _init_ui(self):
@@ -385,7 +388,14 @@ class CombinedRobotApp(QMainWindow):
         model_row = QHBoxLayout()
         model_row.addWidget(QLabel("Model:"))
         self.combo_model = QComboBox()
-        self.combo_model.addItems(["nhamang_batden_seg.pt (Bạt đen nhà màng)", "farm_path_bootstrap.pt", "thamden_seg.pt"])
+        self.combo_model.addItems([
+            "nhamang_pico_seg_ncnn_model (Pico NCNN 320px Siêu nhẹ)",
+            "nhamang_batden_seg_ncnn_model (Nano NCNN 320px Chuẩn)",
+            "nhamang_pico_seg.pt (Pico PyTorch)",
+            "nhamang_batden_seg.pt (Bạt đen nhà màng)",
+            "farm_path_bootstrap.pt",
+            "thamden_seg.pt"
+        ])
         self.combo_model.currentIndexChanged.connect(self._on_model_combo_changed)
         model_row.addWidget(self.combo_model)
         grp_line_cfg_layout.addLayout(model_row)
@@ -823,7 +833,8 @@ class CombinedRobotApp(QMainWindow):
         path_res = None
 
         if self.yolo.is_loaded:
-            yolo_res = self.yolo.predict(frame, conf=line_conf, imgsz=416)
+            target_sz = self.yolo.fixed_imgsz or (320 if "pico" in (self.yolo.model_path or "").lower() else 416)
+            yolo_res = self.yolo.predict(frame, conf=line_conf, imgsz=target_sz)
             if yolo_res.is_valid and yolo_res.chosen_mask is not None:
                 path_res = self.path_detector.process(frame, yolo_res.chosen_mask, is_source_valid=True)
             else:
@@ -1124,12 +1135,19 @@ class CombinedRobotApp(QMainWindow):
         self.lbl_dewarp_patch.setPixmap(pix)
 
     def _on_model_combo_changed(self, idx: int):
-        model_names = ["nhamang_batden_seg.pt", "farm_path_bootstrap.pt", "thamden_seg.pt"]
+        model_names = [
+            "nhamang_pico_seg_ncnn_model",
+            "nhamang_batden_seg_ncnn_model",
+            "nhamang_pico_seg.pt",
+            "nhamang_batden_seg.pt",
+            "farm_path_bootstrap.pt",
+            "thamden_seg.pt"
+        ]
         if idx < len(model_names):
             m_path = os.path.join(CURRENT_DIR, "models", model_names[idx])
             if os.path.exists(m_path):
                 self.yolo.load_model(m_path, device=self.device)
-                self.status_bar.showMessage(f"Đã chuyển model Line sang: {model_names[idx]}")
+                self.status_bar.showMessage(f"Đã chuyển model Line sang: {model_names[idx]} ({self.yolo.device_display_name})")
                 self._reprocess_current_frame()
 
     def _on_line_conf_changed(self, val: int):
