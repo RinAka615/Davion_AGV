@@ -16,6 +16,12 @@ if [ "$XDG_SESSION_TYPE" = "wayland" ] && [ -z "$QT_QPA_PLATFORM" ]; then
 fi
 export QT_LOGGING_RULES="*.warning=false"
 
+# Giới hạn số luồng CPU để chống sụt áp nguồn (Brownout/Power Cutoff) trên Raspberry Pi 5
+export OMP_NUM_THREADS=2
+export MKL_NUM_THREADS=2
+export OPENBLAS_NUM_THREADS=2
+export TORCH_NUM_THREADS=2
+
 # 1. Chọn môi trường Python tối ưu (.venv-yolo trước)
 if [ -f "$PROJECT_DIR/.venv-yolo/bin/python" ]; then
     PYTHON_EXE="$PROJECT_DIR/.venv-yolo/bin/python"

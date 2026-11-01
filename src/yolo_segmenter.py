@@ -126,6 +126,13 @@ class YoloSegmenter:
         self.fallback_reason: str = ""
         self.device: str = "cpu"
         self._resolve_device(self.requested_device)
+        try:
+            import torch
+            # Giới hạn số luồng PyTorch trên CPU (đặc biệt trên Raspberry Pi/ARM) để chống sụt áp nguồn (Brownout)
+            threads = int(os.environ.get("TORCH_NUM_THREADS", "2"))
+            torch.set_num_threads(threads)
+        except Exception:
+            pass
 
         self.conf_threshold: float = conf_threshold
         self.imgsz: int = imgsz

@@ -368,6 +368,9 @@ class ProcessingWorker(QThread):
             sleep_time = target_period - cycle_time
             if sleep_time > 0.002:
                 time.sleep(sleep_time)
+            else:
+                # Trên CPU/ARM: Thêm khoảng nghỉ ngắn 10ms để CPU không bị ghim 100% gây sụt áp nguồn (Brownout)
+                time.sleep(0.01)
 
     def stop(self):
         self.is_running = False
