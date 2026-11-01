@@ -1,0 +1,27 @@
+{
+  "version": "2.1",
+  "farm_name": "ThamDen_Indoor",
+  "mode": "ai",
+  "description": "Profile for the supplied portrait thamden.mp4. ROI keeps the farther portion with visible tarp boundaries; the old farm profile is preserved.",
+  "created_at": "2026-10-23 23:00:59",
+  "detector": {
+    "center_method": "box",
+    "roi_top_pct": 0.1,
+    "roi_height_pct": 0.4,
+    "roi_width_pct": 1.0,
+    "roi_center_x_pct": 0.5,
+    "threshold": 128,
+    "k_open": 3,
+    "k_close": 5,
+    "num_scanlines": 24,
+    "min_path_width_px": 40,
+    "smoothing_factor": 0.35
+  },
+  "yolo": {
+    "model_path": "models/thamden_seg.pt",
+    "conf_threshold": 0.25,
+    "imgsz": 416,
+    "device": "auto"
+  },
+  "color_model": {}
+}

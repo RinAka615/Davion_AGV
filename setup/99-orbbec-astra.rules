@@ -1,0 +1,5 @@
+# Orbbec Astra Pro Camera Udev Rules
+# Cấp quyền đọc/ghi không cần sudo cho cả USB depth và UVC RGB Camera
+SUBSYSTEM=="usb", ATTR{idVendor}=="2bc5", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="2bc5", MODE="0666", GROUP="video"
+

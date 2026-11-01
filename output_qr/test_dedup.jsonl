@@ -1,0 +1,3 @@
+{"timestamp": "2026-10-30T16:47:06.302813+07:00", "video_timestamp_sec": 1.0, "text": "TEST-CODE-A", "corners": [[10.0, 10.0], [100.0, 10.0], [100.0, 100.0], [10.0, 100.0]], "backend": "zxing-cpp", "format": "QR_CODE"}
+{"timestamp": "2026-10-30T16:47:06.302928+07:00", "video_timestamp_sec": 1.6, "text": "TEST-CODE-B", "corners": [[10.0, 10.0], [100.0, 10.0], [100.0, 100.0], [10.0, 100.0]], "backend": "zxing-cpp", "format": "QR_CODE"}
+{"timestamp": "2026-10-30T16:47:06.302982+07:00", "video_timestamp_sec": 3.0, "text": "TEST-CODE-A", "corners": [[10.0, 10.0], [100.0, 10.0], [100.0, 100.0], [10.0, 100.0]], "backend": "zxing-cpp", "format": "QR_CODE"}

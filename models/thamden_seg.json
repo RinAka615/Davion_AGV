@@ -1,0 +1,48 @@
+{
+  "model": "models/thamden_seg.pt",
+  "created_date": "2026-10-23",
+  "architecture": "YOLO26n-seg",
+  "classes": {
+    "0": "bat_loi_di"
+  },
+  "parent_model": "models/farm_path_bootstrap.pt",
+  "source_video": "Quỳnh Robotics [13-10-2026 20_33]/thamden.mp4",
+  "source_sha256": "65e4181c65b4717c256f90d1c86db8d28f3c89303a9c59119ed572558436e8bb",
+  "model_sha256": "7b91c870e8c9b3703e8b5b3546329e71d6814e9c7824ea1aded6d42c6d474cfb",
+  "epochs": 70,
+  "training_device": "CUDA RTX 3050 Laptop",
+  "train_imgsz": 512,
+  "app_imgsz": 416,
+  "app_confidence_threshold": 0.25,
+  "dataset_counts": {
+    "train": 53,
+    "val": 18,
+    "test": 10
+  },
+  "app_profile": "profiles/thamden_profile.json",
+  "launcher": "./start_thamden.sh",
+  "held_out_test": {
+    "positive_test_frames": 8,
+    "positive_frames_detected": 8,
+    "mean_positive_mask_iou": 0.9913799398084959,
+    "negative_test_crops": 2,
+    "negative_false_detections": 0
+  },
+  "full_video_detected_frames": 648,
+  "full_video_frames": 648,
+  "limitations": [
+    "Test is a reserved temporal block of the SAME video/room, not an independent scene.",
+    "Annotations are visually estimated polygons, not pixel-perfect ground truth.",
+    "Negative tests are background crops, not a separate negative video.",
+    "This evaluates material detection, not navigation or motor control."
+  ],
+  "app_checks": {
+    "gui_profile_loaded": true,
+    "headless_frames_checked": 30,
+    "all_headless_frames_tracking": true,
+    "launcher_checked_from_outside_workspace": true,
+    "uart_enabled_during_checks": false,
+    "profile_regression_tests": 2,
+    "segmenter_tests": 8
+  }
+}

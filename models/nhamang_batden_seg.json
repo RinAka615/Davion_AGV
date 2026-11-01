@@ -1,0 +1,76 @@
+{
+  "model": "models/nhamang_batden_seg.pt",
+  "created_date": "2026-10-25",
+  "architecture": "YOLO26n-seg",
+  "classes": {
+    "0": "bat_loi_di"
+  },
+  "parent_model": "models/thamden_seg.pt",
+  "lineage": [
+    "models/farm_path_bootstrap.pt",
+    "models/thamden_seg.pt",
+    "models/nhamang_batden_seg.pt"
+  ],
+  "source_video": "nhamang_20261025_030235.mp4",
+  "source_sha256": "2c1913d846224a9e409fcfa02192c9888a1af65561ac80a8fa6bdb88f66d098c",
+  "model_sha256": "da01c95cef95d3d06b12aa451b00d4aa2b8bfff1af7b256b3cf5fbb15c451bd4",
+  "model_bytes": 6586198,
+  "epochs": 85,
+  "training_device": "CUDA NVIDIA GeForce RTX 3050 Laptop GPU",
+  "train_imgsz": 512,
+  "app_imgsz": 416,
+  "app_confidence_threshold": 0.25,
+  "dataset_counts": {
+    "train": 81,
+    "val": 26,
+    "test": 21
+  },
+  "app_profile": "profiles/nhamang_batden_profile.json",
+  "launcher": "./start_nhamang.sh",
+  "default_app_model": true,
+  "held_out_test": {
+    "positive_frames": 6,
+    "positive_detected": 6,
+    "mean_positive_mask_iou": 0.9706858628368781,
+    "min_positive_mask_iou": 0.9595535876123151,
+    "positive_mask_iou_ci95": [
+      0.9661592357654228,
+      0.9736915390471245
+    ],
+    "negative_full_frames": 3,
+    "negative_full_false_detections": 0,
+    "negative_crops": 2,
+    "negative_crop_false_detections": 0,
+    "negative_total": 5,
+    "negative_total_false_detections": 0,
+    "mean_latency_ms": 20.341754000004254
+  },
+  "thamden_replay_test": {
+    "positive_frames": 8,
+    "positive_detected": 8,
+    "mean_positive_mask_iou": 0.9891941874073409,
+    "negative_crops": 2,
+    "negative_false_detections": 0
+  },
+  "farm_bootstrap_replay_val": {
+    "positive_frames": 8,
+    "positive_detected": 8,
+    "mean_positive_mask_iou": 0.9254205772722699
+  },
+  "full_video_sweep": {
+    "total_frames": 612,
+    "tarp_present_0_445_frames": 446,
+    "tarp_present_0_445_yolo_detected": 446,
+    "tarp_present_0_445_box_tracking": 446,
+    "tarp_corridor_0_435_path_tracking": 423,
+    "post_tarp_456_611_frames": 156,
+    "post_tarp_456_611_yolo_false_detections": 0,
+    "post_tarp_458_611_box_false_tracking": 0,
+    "mean_yolo_latency_ms": 11.389866929748736
+  },
+  "limitations": [
+    "Held-out test blocks come from reserved temporal segments of the same room/video, not a separate building.",
+    "Polygon ground truth is RANSAC edge-fitted + visually verified on 1280x720 frames rather than manual pixel-by-pixel brushwork.",
+    "Outdoor/greenhouse solar glare on wet black mulch may still differ from indoor ceiling lights."
+  ]
+}
