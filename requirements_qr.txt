@@ -3,5 +3,6 @@ opencv-python>=4.8.0
 numpy>=1.24.0
 zxing-cpp>=2.2.0
 qrcode[pil]>=7.4.2
-PyQt5>=5.15.0
+# PyQt5 được nạp qua hệ thống (python3-pyqt5)
+# PyQt5>=5.15.0
 

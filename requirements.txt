@@ -7,7 +7,9 @@ pyserial>=3.5
 ultralytics>=8.0.0
 
 # QR Code Scanning & Measurement Dependencies
-PyQt5>=5.15.0
+# Lưu ý: Trên Ubuntu ARM64 (Raspberry Pi 5 / Python 3.14+), PyQt5 được cài qua APT (python3-pyqt5)
+# để tránh lỗi thiếu qmake khi biên dịch từ nguồn qua pip.
+# PyQt5>=5.15.0
 zxing-cpp>=2.2.0
 qrcode[pil]>=7.4.2
 

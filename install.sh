@@ -33,7 +33,8 @@ if [ "$HAS_SUDO" = true ] && command -v apt-get &> /dev/null; then
         libxcb-xinerama0 \
         libxkbcommon-x11-0 \
         v4l-utils \
-        usbutils
+        usbutils \
+        python3-pyqt5
 else
     echo "ℹ️ Bỏ qua cài đặt APT (không dùng Debian/Ubuntu hoặc không có sudo)."
 fi
@@ -42,8 +43,8 @@ fi
 echo ""
 echo "▶ [Bước 2/5] Khởi tạo môi trường ảo Python (.venv-yolo)..."
 if [ ! -d "$PROJECT_DIR/.venv-yolo" ]; then
-    python3 -m venv "$PROJECT_DIR/.venv-yolo"
-    echo "✓ Đã tạo thành công thư mục .venv-yolo"
+    python3 -m venv --system-site-packages "$PROJECT_DIR/.venv-yolo"
+    echo "✓ Đã tạo thành công thư mục .venv-yolo (system-site-packages enabled)"
 else
     echo "✓ Thư mục .venv-yolo đã tồn tại, tiếp tục sử dụng."
 fi
