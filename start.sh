@@ -16,11 +16,11 @@ if [ "$XDG_SESSION_TYPE" = "wayland" ] && [ -z "$QT_QPA_PLATFORM" ]; then
 fi
 export QT_LOGGING_RULES="*.warning=false"
 
-# Giới hạn số luồng CPU để chống sụt áp nguồn (Brownout/Power Cutoff) trên Raspberry Pi 5
-export OMP_NUM_THREADS=2
-export MKL_NUM_THREADS=2
-export OPENBLAS_NUM_THREADS=2
-export TORCH_NUM_THREADS=2
+# Cấu hình số luồng CPU (mặc định 4 luồng trên Pi 5; người dùng có thể tùy biến qua biến môi trường)
+export OMP_NUM_THREADS=${OMP_NUM_THREADS:-4}
+export MKL_NUM_THREADS=${MKL_NUM_THREADS:-4}
+export OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-4}
+export TORCH_NUM_THREADS=${TORCH_NUM_THREADS:-4}
 
 # 1. Chọn môi trường Python tối ưu (.venv-yolo trước)
 if [ -f "$PROJECT_DIR/.venv-yolo/bin/python" ]; then
@@ -48,10 +48,15 @@ else
     fi
 fi
 
-if [ -f "$PROJECT_DIR/models/nhamang_batden_seg.pt" ]; then
+if [ -f "$PROJECT_DIR/models/batden_fast_256.pt" ]; then
+    MODEL_FILE="$PROJECT_DIR/models/batden_fast_256.pt"
+    PROFILE_ARGS=(--profile "$PROJECT_DIR/profiles/batden_fast_profile.json" --imgsz 256)
+elif [ -f "$PROJECT_DIR/models/nhamang_batden_seg.pt" ]; then
     MODEL_FILE="$PROJECT_DIR/models/nhamang_batden_seg.pt"
+    PROFILE_ARGS=(--profile "$PROJECT_DIR/profiles/nhamang_batden_profile.json" --imgsz 416)
 else
     MODEL_FILE="$PROJECT_DIR/models/farm_path_bootstrap.pt"
+    PROFILE_ARGS=()
 fi
 
 # 2. Xử lý tham số truyền vào
@@ -68,9 +73,10 @@ else
     
     if [ -n "$SAMPLE_VIDEO" ] && [ -f "$SAMPLE_VIDEO" ]; then
         echo "▶ Tự động nạp video mẫu có sẵn: $(basename "$SAMPLE_VIDEO")"
-        "$PYTHON_EXE" main.py --video "$SAMPLE_VIDEO" --model "$MODEL_FILE"
+        echo "▶ Nạp model tối ưu: $(basename "$MODEL_FILE")"
+        "$PYTHON_EXE" main.py --video "$SAMPLE_VIDEO" --model "$MODEL_FILE" "${PROFILE_ARGS[@]}"
     else
         echo "▶ Mở giao diện chính (chưa nạp video)..."
-        "$PYTHON_EXE" main.py --model "$MODEL_FILE"
+        "$PYTHON_EXE" main.py --model "$MODEL_FILE" "${PROFILE_ARGS[@]}"
     fi
 fi

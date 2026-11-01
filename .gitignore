@@ -19,7 +19,7 @@ __pycache__/
 *.swp
 *.swo
 
-# Crash logs & temporary files
-*.crash
-*.upload
-*.tmp
+# Training runs & caches
+runs/
+runs_train/
+*.cache
