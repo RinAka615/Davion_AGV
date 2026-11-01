@@ -1,0 +1,20 @@
+description: Ultralytics YOLO26n-seg model trained on /home/warlord/RobotNongNghiep/output/nhamang_20261025_training/dataset/data.yaml
+author: Ultralytics
+date: '2026-11-01T18:16:23.821482+07:00'
+version: 8.4.193
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: segment
+head: Segment26
+batch: 1
+imgsz:
+- 320
+- 320
+names:
+  0: bat_loi_di
+args:
+  batch: 1
+  quantize: 16
+channels: 3
+end2end: false

@@ -136,6 +136,8 @@ class YoloSegmenter:
 
         self.conf_threshold: float = conf_threshold
         self.imgsz: int = imgsz
+        self.fixed_imgsz: Optional[int] = None
+        self.is_ncnn: bool = False
         self.model_path: Optional[str] = None
         self.model: Any = None
         self.class_names: Dict[int, str] = {}
@@ -174,7 +176,7 @@ class YoloSegmenter:
         self.device = self.effective_device
 
     def load_model(self, model_path: str, device: Optional[str] = None) -> bool:
-        """Loads and validates a YOLO segmentation model."""
+        """Loads and validates a YOLO segmentation model (.pt or NCNN quantized directory)."""
         if device is not None:
             self._resolve_device(device)
 
@@ -182,10 +184,16 @@ class YoloSegmenter:
         self.load_error = ""
         self.model = None
         self.class_names = {}
+        self.fixed_imgsz = None
+        self.is_ncnn = False
+
+        # Normalize if user picked a file inside an NCNN model directory
+        if model_path and (model_path.endswith(".param") or model_path.endswith(".bin") or os.path.basename(model_path) == "metadata.yaml"):
+            model_path = os.path.dirname(model_path)
         self.model_path = model_path
 
         if not os.path.exists(model_path):
-            self.load_error = f"File model không tồn tại: {model_path}"
+            self.load_error = f"File/thư mục model không tồn tại: {model_path}"
             return False
 
         try:
@@ -195,7 +203,43 @@ class YoloSegmenter:
             return False
 
         try:
-            loaded_model = YOLO(model_path)
+            if os.path.isdir(model_path) or "ncnn" in model_path.lower():
+                self.is_ncnn = True
+                meta_file = os.path.join(model_path, "metadata.yaml")
+                if os.path.exists(meta_file):
+                    try:
+                        import yaml
+                        with open(meta_file, "r", encoding="utf-8") as f:
+                            meta = yaml.safe_load(f) or {}
+                        imgsz_meta = meta.get("imgsz")
+                        if isinstance(imgsz_meta, (list, tuple)) and len(imgsz_meta) > 0:
+                            self.fixed_imgsz = int(imgsz_meta[0])
+                            self.imgsz = self.fixed_imgsz
+                        elif isinstance(imgsz_meta, int):
+                            self.fixed_imgsz = imgsz_meta
+                            self.imgsz = self.fixed_imgsz
+                    except Exception:
+                        pass
+                if self.fixed_imgsz is None:
+                    self.fixed_imgsz = 320
+                    self.imgsz = 320
+                self.effective_device = "cpu"
+                self.device = "cpu"
+                self.device_display_name = f"NCNN Quantized ({get_cpu_info()})"
+                self.fallback_reason = ""
+
+            loaded_model = YOLO(model_path, task="segment")
+            if self.is_ncnn:
+                # Warm up NCNN AutoBackend once during load so the first video frame has zero lag
+                dummy_sz = self.fixed_imgsz or 320
+                dummy_img = np.zeros((dummy_sz, dummy_sz, 3), dtype=np.uint8)
+                loaded_model.predict(
+                    source=dummy_img,
+                    imgsz=dummy_sz,
+                    device="cpu",
+                    verbose=False,
+                    retina_masks=False
+                )
             # Validate model task
             task = getattr(loaded_model, "task", None)
             if not task and hasattr(loaded_model, "overrides"):
@@ -204,7 +248,7 @@ class YoloSegmenter:
             if task != "segment":
                 self.load_error = (
                     f"Model không phải là mô hình segmentation (task='{task}'). "
-                    f"Vui lòng cung cấp model YOLO segmentation (.pt)!"
+                    f"Vui lòng cung cấp model YOLO segmentation (.pt hoặc NCNN)!"
                 )
                 return False
 
@@ -262,20 +306,20 @@ class YoloSegmenter:
 
         h_img, w_img = frame_bgr.shape[:2]
         effective_conf = conf if conf is not None else self.conf_threshold
-        effective_imgsz = imgsz if imgsz is not None else self.imgsz
+        effective_imgsz = self.fixed_imgsz if self.fixed_imgsz is not None else (imgsz if imgsz is not None else self.imgsz)
 
         t_start = time.perf_counter()
         device_used = self.device_display_name
         fallback_reason = self.fallback_reason
 
         try:
-            # Predict on full frame with retina_masks=True to ensure exact full-frame mask alignment
+            # Predict with retina_masks=False + fast letterbox unpadding to avoid 118MB full-res tensor ops on CPU
             results = self.model.predict(
                 source=frame_bgr,
                 imgsz=effective_imgsz,
                 conf=effective_conf,
                 device=self.effective_device,
-                retina_masks=True,
+                retina_masks=False,
                 verbose=False
             )
             inference_time_ms = (time.perf_counter() - t_start) * 1000.0
@@ -295,7 +339,7 @@ class YoloSegmenter:
                         imgsz=effective_imgsz,
                         conf=effective_conf,
                         device="cpu",
-                        retina_masks=True,
+                        retina_masks=False,
                         verbose=False
                     )
                     inference_time_ms = (time.perf_counter() - t_start) * 1000.0
@@ -348,7 +392,7 @@ class YoloSegmenter:
 
         # Extract all detected instances
         instances: List[InstanceDetection] = []
-        mask_data = masks.data.cpu().numpy()  # (N, H, W) or (N, H_mask, W_mask)
+        mask_data = masks.data.cpu().numpy()  # (N, H_mask, W_mask)
         num_instances = len(boxes)
 
         for i in range(num_instances):
@@ -362,24 +406,33 @@ class YoloSegmenter:
             x2 = int(np.clip(x2, x1 + 1, w_img))
             y2 = int(np.clip(y2, y1 + 1, h_img))
 
-            # Retrieve mask and ensure full-frame dimensions (h_img, w_img)
-            inst_mask = (mask_data[i] > 0.5).astype(np.uint8) * 255
-            if inst_mask.shape != (h_img, w_img):
-                # Letterbox-safe resize if retina_masks wasn't exact
-                inst_mask = cv2.resize(inst_mask, (w_img, h_img), interpolation=cv2.INTER_NEAREST)
-
-            area_px = int(np.count_nonzero(inst_mask))
-            if area_px == 0:
-                continue
-
-            # Centroid computation via moments
-            M = cv2.moments(inst_mask)
-            if M["m00"] > 0:
+            raw_m = mask_data[i]
+            mh, mw = raw_m.shape[:2]
+            if (mh, mw) != (h_img, w_img):
+                gain = min(mw / float(w_img), mh / float(h_img))
+                pad_x = int(round((mw - w_img * gain) / 2.0 - 0.1))
+                pad_y = int(round((mh - h_img * gain) / 2.0 - 0.1))
+                y0 = max(0, pad_y)
+                y1_m = max(y0 + 1, mh - pad_y) if pad_y > 0 else mh
+                x0 = max(0, pad_x)
+                x1_m = max(x0 + 1, mw - pad_x) if pad_x > 0 else mw
+                small_mask = (raw_m[y0:y1_m, x0:x1_m] > 0.5).astype(np.uint8) * 255
+                sh, sw = small_mask.shape[:2]
+                M = cv2.moments(small_mask)
+                if M["m00"] <= 0:
+                    continue
+                cx = int((M["m10"] / M["m00"]) * (w_img / float(sw)))
+                cy = int((M["m01"] / M["m00"]) * (h_img / float(sh)))
+                area_px = max(1, int((M["m00"] / 255.0) * ((w_img * h_img) / float(sw * sh))))
+                inst_mask = cv2.resize(small_mask, (w_img, h_img), interpolation=cv2.INTER_NEAREST)
+            else:
+                inst_mask = (raw_m > 0.5).astype(np.uint8) * 255
+                M = cv2.moments(inst_mask)
+                if M["m00"] <= 0:
+                    continue
                 cx = int(M["m10"] / M["m00"])
                 cy = int(M["m01"] / M["m00"])
-            else:
-                cx = (x1 + x2) // 2
-                cy = (y1 + y2) // 2
+                area_px = int(M["m00"] / 255.0)
 
             instances.append(InstanceDetection(
                 instance_id=i,

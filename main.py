@@ -417,18 +417,27 @@ def run_headless_pipeline(
 
 
 def main():
+    pico_ncnn = os.path.join(PROJECT_ROOT, "models", "nhamang_pico_seg_ncnn_model")
+    nano_ncnn = os.path.join(PROJECT_ROOT, "models", "nhamang_batden_seg_ncnn_model")
     nhamang_model = os.path.join(PROJECT_ROOT, "models", "nhamang_batden_seg.pt")
-    default_model = nhamang_model if os.path.exists(nhamang_model) else os.path.join(PROJECT_ROOT, "models", "farm_path_bootstrap.pt")
+    if os.path.exists(pico_ncnn):
+        default_model = pico_ncnn
+    elif os.path.exists(nano_ncnn):
+        default_model = nano_ncnn
+    elif os.path.exists(nhamang_model):
+        default_model = nhamang_model
+    else:
+        default_model = os.path.join(PROJECT_ROOT, "models", "farm_path_bootstrap.pt")
     default_output = os.path.join(PROJECT_ROOT, "output")
 
     parser = argparse.ArgumentParser(description="RobotNongNghiep Path Detection System [Dual-Engine: AI & Color]")
     parser.add_argument("--mode", type=str, default="ai", choices=["ai", "color", "yolo"],
                         help="Detection engine mode: 'ai' (YOLO Segmentation) or 'color' (Image Processing)")
     parser.add_argument("--video", "-v", type=str, default=None, help="Path to input video file")
-    parser.add_argument("--model", "-m", type=str, default=default_model, help="Path to YOLO segmentation model (.pt)")
+    parser.add_argument("--model", "-m", type=str, default=default_model, help="Path to YOLO segmentation model (.pt or *_ncnn_model)")
     parser.add_argument("--profile", type=str, default=None, help="Optional JSON profile for model and ROI settings")
     parser.add_argument("--conf", type=float, default=0.25, help="YOLO confidence threshold (default: 0.25)")
-    parser.add_argument("--imgsz", type=int, default=416, help="YOLO input image size (default: 416)")
+    parser.add_argument("--imgsz", type=int, default=320, help="YOLO input image size (default: 320)")
     try:
         from src.yolo_segmenter import is_cuda_available_and_working
         default_device = "cuda" if is_cuda_available_and_working() else "cpu"

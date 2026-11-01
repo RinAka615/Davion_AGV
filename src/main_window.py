@@ -422,11 +422,21 @@ class MainWindow(QMainWindow):
         self.active_mode: str = self.MODE_AI if initial_mode.lower() in ("ai", "yolo") else self.MODE_COLOR
 
         # Device & YOLO Segmenter
+        self._explicit_initial_model = initial_model_path if (initial_model_path and os.path.exists(initial_model_path)) else None
+        pico_ncnn = os.path.join(PROJECT_ROOT, "models", "nhamang_pico_seg_ncnn_model")
+        nano_ncnn = os.path.join(PROJECT_ROOT, "models", "nhamang_batden_seg_ncnn_model")
         nhamang_model = os.path.join(PROJECT_ROOT, "models", "nhamang_batden_seg.pt")
-        fallback_model = nhamang_model if os.path.exists(nhamang_model) else os.path.join(PROJECT_ROOT, "models", "farm_path_bootstrap.pt")
-        default_model = initial_model_path or fallback_model
+        if os.path.exists(pico_ncnn):
+            fallback_model = pico_ncnn
+        elif os.path.exists(nano_ncnn):
+            fallback_model = nano_ncnn
+        elif os.path.exists(nhamang_model):
+            fallback_model = nhamang_model
+        else:
+            fallback_model = os.path.join(PROJECT_ROOT, "models", "farm_path_bootstrap.pt")
+        default_model = self._explicit_initial_model or fallback_model
         self.yolo_conf: float = 0.25
-        self.yolo_imgsz: int = 416
+        self.yolo_imgsz: int = 320 if ("ncnn" in default_model.lower() or "pico" in default_model.lower()) else 416
         self.cuda_status = get_cuda_status()
         if initial_device:
             self.yolo_device = initial_device
@@ -439,6 +449,8 @@ class MainWindow(QMainWindow):
             imgsz=self.yolo_imgsz,
             device=self.yolo_device
         )
+        if self.segmenter.fixed_imgsz is not None:
+            self.yolo_imgsz = self.segmenter.fixed_imgsz
 
         # Playback & state
         self.worker: Optional[ProcessingWorker] = None
@@ -684,12 +696,21 @@ class MainWindow(QMainWindow):
         self.control_layout.addWidget(box)
 
     def _init_yolo_group(self):
-        self.group_yolo = QGroupBox("🤖 Mô hình YOLO Segmentation")
+        self.group_yolo = QGroupBox("🤖 Mô hình AI / NCNN Quantized")
         layout = QVBoxLayout(self.group_yolo)
+
+        # Quick Model Preset Dropdown + File Browser
+        row_preset = QHBoxLayout()
+        row_preset.addWidget(QLabel("Chọn nhanh:"))
+        self.combo_model_preset = QComboBox()
+        self._populate_model_presets()
+        self.combo_model_preset.currentIndexChanged.connect(self._on_model_preset_changed)
+        row_preset.addWidget(self.combo_model_preset, 1)
+        layout.addLayout(row_preset)
 
         # Model file selector row
         row_model = QHBoxLayout()
-        self.btn_select_model = QPushButton("📂 Chọn Model (.pt)")
+        self.btn_select_model = QPushButton("📂 Chọn File (.pt / NCNN)")
         self.btn_select_model.clicked.connect(self._on_select_model_clicked)
         self.lbl_model_name = QLabel(os.path.basename(self.segmenter.model_path or "Chưa chọn"))
         self.lbl_model_name.setStyleSheet("color: #81c784; font-weight: bold;")
@@ -1243,19 +1264,82 @@ class MainWindow(QMainWindow):
                 self.lbl_device_real.setStyleSheet("color: #81c784; font-size: 11px;")
                 self.lbl_device_real.setToolTip("")
 
+    def _populate_model_presets(self):
+        if not hasattr(self, "combo_model_preset"):
+            return
+        self.combo_model_preset.blockSignals(True)
+        self.combo_model_preset.clear()
+        models_dir = os.path.join(PROJECT_ROOT, "models")
+        presets = [
+            ("⚡ Pico NCNN Quantized (320px - Siêu nhẹ)", os.path.join(models_dir, "nhamang_pico_seg_ncnn_model")),
+            ("🚀 Nano NCNN Quantized (320px - Cân bằng)", os.path.join(models_dir, "nhamang_batden_seg_ncnn_model")),
+            ("⚡ Pico PyTorch (.pt - 320px)", os.path.join(models_dir, "nhamang_pico_seg.pt")),
+            ("🎯 Nano PyTorch Gốc (.pt - 416px)", os.path.join(models_dir, "nhamang_batden_seg.pt")),
+            ("🎯 Thảm đen PyTorch (.pt)", os.path.join(models_dir, "thamden_seg.pt")),
+            ("🎯 Bootstrap PyTorch (.pt)", os.path.join(models_dir, "farm_path_bootstrap.pt")),
+        ]
+        cur_abs = os.path.abspath(self.segmenter.model_path) if self.segmenter.model_path else ""
+        sel_idx = -1
+        for label, p in presets:
+            if os.path.exists(p):
+                self.combo_model_preset.addItem(label, p)
+                if os.path.abspath(p) == cur_abs:
+                    sel_idx = self.combo_model_preset.count() - 1
+        if sel_idx >= 0:
+            self.combo_model_preset.setCurrentIndex(sel_idx)
+        self.combo_model_preset.blockSignals(False)
+
+    def _on_model_preset_changed(self, idx: int):
+        if idx < 0:
+            return
+        path = self.combo_model_preset.itemData(idx)
+        if path and os.path.exists(path):
+            self._load_yolo_model(path)
+
     def _on_select_model_clicked(self):
         default_dir = os.path.join(PROJECT_ROOT, "models")
         path, _ = QFileDialog.getOpenFileName(
-            self, "Chọn file model YOLO (.pt)", default_dir, "PyTorch Model (*.pt);;Tất cả tệp (*)"
+            self,
+            "Chọn model AI (.pt hoặc file model.ncnn.param trong thư mục NCNN)",
+            default_dir,
+            "Tất cả Model AI (*.pt *.param *.onnx);;NCNN Quantized (*.param);;PyTorch Model (*.pt);;Tất cả tệp (*)"
         )
         if path:
             self._load_yolo_model(path)
 
     def _load_yolo_model(self, path: str):
         self._stop_worker()
+        if path.endswith(".param") or path.endswith(".bin") or os.path.basename(path) == "metadata.yaml":
+            path = os.path.dirname(path)
+
         dev = self._get_selected_device()
         ok = self.segmenter.load_model(path, device=dev)
         self.lbl_model_name.setText(os.path.basename(path))
+        self._populate_model_presets()
+
+        # Tự động đồng bộ Img Size theo model lượng tử hóa / pico (320px)
+        if self.segmenter.fixed_imgsz is not None:
+            target_sz = str(self.segmenter.fixed_imgsz)
+            self.yolo_imgsz = self.segmenter.fixed_imgsz
+            if hasattr(self, "combo_imgsz"):
+                if self.combo_imgsz.findText(target_sz) >= 0:
+                    self.combo_imgsz.blockSignals(True)
+                    self.combo_imgsz.setCurrentText(target_sz)
+                    self.combo_imgsz.blockSignals(False)
+                self.combo_imgsz.setEnabled(False)
+                self.combo_imgsz.setToolTip(f"Model NCNN cố định độ phân giải đầu vào imgsz={target_sz}")
+        else:
+            if hasattr(self, "combo_imgsz"):
+                self.combo_imgsz.setEnabled(True)
+                self.combo_imgsz.setToolTip("")
+            if "pico" in os.path.basename(path).lower() or "320" in os.path.basename(path).lower():
+                self.yolo_imgsz = 320
+                self.segmenter.imgsz = 320
+                if hasattr(self, "combo_imgsz") and self.combo_imgsz.findText("320") >= 0:
+                    self.combo_imgsz.blockSignals(True)
+                    self.combo_imgsz.setCurrentText("320")
+                    self.combo_imgsz.blockSignals(False)
+
         self._update_model_status_label()
         if ok:
             self.detector.reset_tracking()
@@ -1265,7 +1349,7 @@ class MainWindow(QMainWindow):
                     self.reader.current_frame_idx,
                     self.reader.get_timestamp_sec()
                 )
-            self.status_bar.showMessage(f"Đã nạp model YOLO: {os.path.basename(path)} ({self.segmenter.device_display_name})")
+            self.status_bar.showMessage(f"Đã nạp model: {os.path.basename(path)} ({self.segmenter.device_display_name})")
         else:
             QMessageBox.critical(self, "Lỗi nạp Model", self.segmenter.load_error)
 
@@ -2167,6 +2251,7 @@ class MainWindow(QMainWindow):
             self, "Nạp Profile Farm", ProfileManager.DEFAULT_PROFILE_DIR, "JSON files (*.json)"
         )
         if path:
+            self._explicit_initial_model = None
             self._load_profile_path(path)
 
     def _load_profile_path(self, path: str):
@@ -2197,12 +2282,22 @@ class MainWindow(QMainWindow):
                     self.combo_device.setCurrentIndex(device_index)
                 finally:
                     self.combo_device.blockSignals(was_blocked)
-            m_path = y_data.get("model_path")
-            if m_path and os.path.exists(m_path):
-                self._load_yolo_model(m_path)
             self.yolo_conf = float(y_data.get("conf_threshold", 0.25))
             self.slider_yolo_conf.setValue(int(self.yolo_conf * 100))
-            self.yolo_imgsz = int(y_data.get("imgsz", 416))
+            self.yolo_imgsz = int(y_data.get("imgsz", 320))
+            m_path = self._explicit_initial_model or y_data.get("model_path")
+            if m_path and os.path.exists(m_path):
+                cur_loaded = os.path.abspath(self.segmenter.model_path) if (self.segmenter.is_loaded and self.segmenter.model_path) else ""
+                if os.path.abspath(m_path) != cur_loaded:
+                    self._load_yolo_model(m_path)
+            if self.segmenter.fixed_imgsz is not None:
+                self.yolo_imgsz = self.segmenter.fixed_imgsz
+            self.segmenter.imgsz = self.yolo_imgsz
+            if hasattr(self, "combo_imgsz") and self.combo_imgsz.findText(str(self.yolo_imgsz)) >= 0:
+                self.combo_imgsz.blockSignals(True)
+                self.combo_imgsz.setCurrentText(str(self.yolo_imgsz))
+                self.combo_imgsz.blockSignals(False)
+                self.combo_imgsz.setEnabled(self.segmenter.fixed_imgsz is None)
 
         # Load Color model settings
         if "color_model" in data:

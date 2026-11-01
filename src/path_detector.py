@@ -179,12 +179,12 @@ class PathDetector:
         valid_ratio = valid_count / float(max(1, total_scans))
 
         # Step 3: Bounding Box & Centerpoint Detection (Direct midpoint logic, no curve fitting)
-        pts = cv2.findNonZero(path_mask)
+        nz_count = int(cv2.countNonZero(path_mask))
         bbox_global = None
         box_center_global = None
 
-        if pts is not None and len(pts) >= 100:
-            bx_r, by_r, bw_r, bh_r = cv2.boundingRect(pts)
+        if nz_count >= 100:
+            bx_r, by_r, bw_r, bh_r = cv2.boundingRect(path_mask)
             if bw_r >= self.min_path_width_px:
                 raw_bx = rx + bx_r
                 raw_by = ry + by_r
@@ -324,12 +324,12 @@ class PathDetector:
                 self.lost_counter = 0
 
             # Confidence based on box coverage and aspect
-            area_ratio = min(1.0, float(len(pts)) / float(max(1, raw_bw * raw_bh)))
+            area_ratio = min(1.0, float(nz_count) / float(max(1, raw_bw * raw_bh)))
             height_ratio = min(1.0, float(raw_bh) / float(max(1, rh)))
             confidence = float(np.clip(height_ratio * 60.0 + area_ratio * 35.0, 15.0, 95.0))
         else:
             self.lost_counter += 1
-            if self.lost_counter >= self.max_lost_frames or pts is None:
+            if self.lost_counter >= self.max_lost_frames or nz_count == 0:
                 current_state = TrackingState.LOST
                 self.prev_box_center = None
                 self.prev_poly_coeffs = None
@@ -371,6 +371,10 @@ class PathDetector:
         num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary_mask)
         if num_labels <= 1:
             return binary_mask
+        if num_labels == 2:
+            if stats[1, cv2.CC_STAT_AREA] >= 100:
+                return binary_mask
+            return np.zeros_like(binary_mask)
 
         h, w = binary_mask.shape
         center_x = w / 2.0
@@ -430,18 +434,14 @@ class PathDetector:
                 ))
                 continue
 
-            # Identify the contiguous run of path pixels closest to center
-            runs = []
-            start = indices[0]
-            prev = indices[0]
-            for idx in indices[1:]:
-                if idx == prev + 1:
-                    prev = idx
-                else:
-                    runs.append((start, prev))
-                    start = idx
-                    prev = idx
-            runs.append((start, prev))
+            # Identify contiguous runs of path pixels via vectorized diff
+            splits = np.where(np.diff(indices) > 1)[0]
+            if len(splits) == 0:
+                runs = [(int(indices[0]), int(indices[-1]))]
+            else:
+                starts = np.insert(indices[splits + 1], 0, indices[0])
+                ends = np.append(indices[splits], indices[-1])
+                runs = list(zip(starts.tolist(), ends.tolist()))
 
             # Select run closest to middle of ROI
             mid_roi = rw / 2.0

@@ -18,9 +18,9 @@
     "smoothing_factor": 0.35
   },
   "yolo": {
-    "model_path": "models/nhamang_batden_seg.pt",
+    "model_path": "models/nhamang_pico_seg_ncnn_model",
     "conf_threshold": 0.25,
-    "imgsz": 416,
+    "imgsz": 320,
     "device": "auto"
   },
   "color_model": {}
