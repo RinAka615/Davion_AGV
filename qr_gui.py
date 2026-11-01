@@ -29,8 +29,19 @@ import PyQt5
 _pyqt5_plugins = os.path.join(os.path.dirname(PyQt5.__file__), "Qt5", "plugins")
 if os.path.exists(_pyqt5_plugins):
     os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = _pyqt5_plugins
+else:
+    for _p in [
+        "/usr/lib/aarch64-linux-gnu/qt5/plugins",
+        "/usr/lib/x86_64-linux-gnu/qt5/plugins",
+        "/usr/lib/qt5/plugins"
+    ]:
+        if os.path.exists(_p):
+            os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = _p
+            break
+    else:
+        os.environ.pop("QT_QPA_PLATFORM_PLUGIN_PATH", None)
 
-if os.environ.get("XDG_SESSION_TYPE") == "wayland" and "QT_QPA_PLATFORM" not in os.environ:
+if (os.environ.get("XDG_SESSION_TYPE") == "wayland" or bool(os.environ.get("WAYLAND_DISPLAY"))) and "QT_QPA_PLATFORM" not in os.environ:
     os.environ["QT_QPA_PLATFORM"] = "wayland;xcb"
 
 os.environ["QT_LOGGING_RULES"] = "*.warning=false"

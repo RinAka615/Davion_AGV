@@ -28,11 +28,24 @@ else
     echo "▶ Sử dụng Python hệ thống: $(which python3)"
 fi
 
-# Khắc phục triệt để lỗi Qt xcb conflict do opencv-python chèn plugin cv2/qt/plugins
+# Tự động tìm thư mục plugin PyQt5 (hỗ trợ đa phiên bản Python 3.10, 3.14...)
+PYQT5_PLUGINS=""
+if [ -d "$PROJECT_DIR/.venv-yolo" ]; then
+    PYQT5_PLUGINS=$(find "$PROJECT_DIR/.venv-yolo" -path "*/PyQt5/Qt5/plugins" 2>/dev/null | head -n 1 || true)
+fi
+if [ -z "$PYQT5_PLUGINS" ] || [ ! -d "$PYQT5_PLUGINS" ]; then
+    for _p in /usr/lib/*-linux-gnu/qt5/plugins /usr/lib/qt5/plugins; do
+        if [ -d "$_p" ]; then
+            PYQT5_PLUGINS="$_p"
+            break
+        fi
+    done
+fi
+
 if [ -n "$PYQT5_PLUGINS" ] && [ -d "$PYQT5_PLUGINS" ]; then
     export QT_QPA_PLATFORM_PLUGIN_PATH="$PYQT5_PLUGINS"
 fi
-if [ "$XDG_SESSION_TYPE" = "wayland" ] && [ -z "$QT_QPA_PLATFORM" ]; then
+if [ -z "$QT_QPA_PLATFORM" ]; then
     export QT_QPA_PLATFORM="wayland;xcb"
 fi
 export QT_LOGGING_RULES="*.warning=false"
