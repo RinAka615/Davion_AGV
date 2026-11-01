@@ -237,6 +237,8 @@ class CombinedRobotApp(QMainWindow):
 
     def _load_best_yolo_model(self):
         models = [
+            os.path.join(CURRENT_DIR, "models", "nhamang_nano_256_ncnn_model"),
+            os.path.join(CURRENT_DIR, "models", "nhamang_micro_256_ncnn_model"),
             os.path.join(CURRENT_DIR, "models", "nhamang_pico_seg_ncnn_model"),
             os.path.join(CURRENT_DIR, "models", "nhamang_batden_seg_ncnn_model"),
             os.path.join(CURRENT_DIR, "models", "nhamang_pico_seg.pt"),
@@ -389,10 +391,12 @@ class CombinedRobotApp(QMainWindow):
         model_row.addWidget(QLabel("Model:"))
         self.combo_model = QComboBox()
         self.combo_model.addItems([
-            "nhamang_pico_seg_ncnn_model (Pico NCNN 320px Siêu nhẹ)",
+            "nhamang_nano_256_ncnn_model (Nano NCNN 256px - Siêu chính xác, ~30 FPS)",
+            "nhamang_micro_256_ncnn_model (Micro NCNN 256px - Cân bằng, ~40 FPS)",
+            "nhamang_pico_seg_ncnn_model (Pico NCNN 320px - Siêu nhẹ, ~48 FPS)",
             "nhamang_batden_seg_ncnn_model (Nano NCNN 320px Chuẩn)",
+            "nhamang_batden_seg.pt (Bạt đen nhà màng - PyTorch)",
             "nhamang_pico_seg.pt (Pico PyTorch)",
-            "nhamang_batden_seg.pt (Bạt đen nhà màng)",
             "farm_path_bootstrap.pt",
             "thamden_seg.pt"
         ])
@@ -1136,10 +1140,12 @@ class CombinedRobotApp(QMainWindow):
 
     def _on_model_combo_changed(self, idx: int):
         model_names = [
+            "nhamang_nano_256_ncnn_model",
+            "nhamang_micro_256_ncnn_model",
             "nhamang_pico_seg_ncnn_model",
             "nhamang_batden_seg_ncnn_model",
-            "nhamang_pico_seg.pt",
             "nhamang_batden_seg.pt",
+            "nhamang_pico_seg.pt",
             "farm_path_bootstrap.pt",
             "thamden_seg.pt"
         ]

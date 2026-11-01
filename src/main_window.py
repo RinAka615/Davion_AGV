@@ -1271,10 +1271,12 @@ class MainWindow(QMainWindow):
         self.combo_model_preset.clear()
         models_dir = os.path.join(PROJECT_ROOT, "models")
         presets = [
-            ("⚡ Pico NCNN Quantized (320px - Siêu nhẹ)", os.path.join(models_dir, "nhamang_pico_seg_ncnn_model")),
-            ("🚀 Nano NCNN Quantized (320px - Cân bằng)", os.path.join(models_dir, "nhamang_batden_seg_ncnn_model")),
-            ("⚡ Pico PyTorch (.pt - 320px)", os.path.join(models_dir, "nhamang_pico_seg.pt")),
+            ("⚡ Nano NCNN Quantized (256px - Siêu chính xác, ~30 FPS)", os.path.join(models_dir, "nhamang_nano_256_ncnn_model")),
+            ("🚀 Micro NCNN Quantized (256px - Cân bằng, ~40 FPS)", os.path.join(models_dir, "nhamang_micro_256_ncnn_model")),
+            ("⚡ Pico NCNN Quantized (320px - Siêu nhẹ, ~48 FPS)", os.path.join(models_dir, "nhamang_pico_seg_ncnn_model")),
+            ("🚀 Nano NCNN Quantized (320px - Chuẩn 320px, ~15 FPS)", os.path.join(models_dir, "nhamang_batden_seg_ncnn_model")),
             ("🎯 Nano PyTorch Gốc (.pt - 416px)", os.path.join(models_dir, "nhamang_batden_seg.pt")),
+            ("⚡ Pico PyTorch (.pt - 320px)", os.path.join(models_dir, "nhamang_pico_seg.pt")),
             ("🎯 Thảm đen PyTorch (.pt)", os.path.join(models_dir, "thamden_seg.pt")),
             ("🎯 Bootstrap PyTorch (.pt)", os.path.join(models_dir, "farm_path_bootstrap.pt")),
         ]

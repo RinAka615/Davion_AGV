@@ -138,6 +138,7 @@ class YoloSegmenter:
         self.imgsz: int = imgsz
         self.fixed_imgsz: Optional[int] = None
         self.is_ncnn: bool = False
+        self.ncnn_net: Any = None
         self.model_path: Optional[str] = None
         self.model: Any = None
         self.class_names: Dict[int, str] = {}
@@ -186,6 +187,7 @@ class YoloSegmenter:
         self.class_names = {}
         self.fixed_imgsz = None
         self.is_ncnn = False
+        self.ncnn_net = None
 
         # Normalize if user picked a file inside an NCNN model directory
         if model_path and (model_path.endswith(".param") or model_path.endswith(".bin") or os.path.basename(model_path) == "metadata.yaml"):
@@ -227,6 +229,24 @@ class YoloSegmenter:
                 self.device = "cpu"
                 self.device_display_name = f"NCNN Quantized ({get_cpu_info()})"
                 self.fallback_reason = ""
+
+                # Try loading pure NCNN C++ net for zero-overhead ARM NEON inference
+                try:
+                    import ncnn
+                    param_file = os.path.join(model_path, "model.ncnn.param")
+                    bin_file = os.path.join(model_path, "model.ncnn.bin")
+                    if os.path.exists(param_file) and os.path.exists(bin_file):
+                        net = ncnn.Net()
+                        net.opt.use_vulkan_compute = False
+                        net.opt.num_threads = 1  # 1 thread optimal for Pi 5 L2 cache locality
+                        net.opt.use_fp16_packed = True
+                        net.opt.use_fp16_storage = True
+                        net.opt.use_fp16_arithmetic = True
+                        if net.load_param(param_file) == 0 and net.load_model(bin_file) == 0:
+                            self.ncnn_net = net
+                            self.device_display_name = f"NCNN Fast C++ 1-Thread ({get_cpu_info()})"
+                except Exception as e_ncnn:
+                    self.ncnn_net = None
 
             loaded_model = YOLO(model_path, task="segment")
             if self.is_ncnn:
@@ -311,6 +331,97 @@ class YoloSegmenter:
         t_start = time.perf_counter()
         device_used = self.device_display_name
         fallback_reason = self.fallback_reason
+
+        # === 1. ULTRA-FAST DIRECT NCNN C++ EXECUTION (ARM NEON ZERO-OVERHEAD) ===
+        if self.ncnn_net is not None:
+            try:
+                import ncnn
+                eff_sz = int(effective_imgsz or 256)
+                img_resized = cv2.resize(frame_bgr, (eff_sz, eff_sz))
+                in_mat = ncnn.Mat.from_pixels(img_resized, ncnn.Mat.PixelType.PIXEL_BGR2RGB, eff_sz, eff_sz)
+                in_mat.substract_mean_normalize([], [1.0 / 255.0, 1.0 / 255.0, 1.0 / 255.0])
+
+                ex = self.ncnn_net.create_extractor()
+                ex.input("in0", in_mat)
+                out0, out1 = ncnn.Mat(), ncnn.Mat()
+                ex.extract("out0", out0)
+                ex.extract("out1", out1)
+
+                arr_out0 = np.array(out0)
+                arr_out1 = np.array(out1)
+                c0 = arr_out0.shape[0] if arr_out0.ndim >= 2 else 37
+                c1 = arr_out1.shape[0] if arr_out1.ndim >= 2 else 32
+                pred = arr_out0.reshape((c0, -1)) # (c0, num_anchors)
+                protos = arr_out1.reshape((c1, -1)) # (num_protos, proto_pixels)
+
+                scores = pred[4, :] # class 0 (bat_loi_di)
+                best_idx = int(np.argmax(scores))
+                best_score = float(scores[best_idx])
+                inference_time_ms = (time.perf_counter() - t_start) * 1000.0
+
+                if best_score >= effective_conf:
+                    mask_coeffs = pred[5:5 + c1, best_idx]
+                    proto_sz = int(np.sqrt(protos.shape[1]))
+                    mask_raw = np.dot(mask_coeffs, protos).reshape((proto_sz, proto_sz))
+                    small_mask = (mask_raw > 0).astype(np.uint8) * 255
+                    inst_mask = cv2.resize(small_mask, (w_img, h_img), interpolation=cv2.INTER_NEAREST)
+
+                    if roi_rect is not None:
+                        rx, ry, rw, rh = roi_rect
+                        roi_m = np.zeros_like(inst_mask)
+                        rx_e = min(w_img, rx + rw)
+                        ry_e = min(h_img, ry + rh)
+                        roi_m[ry:ry_e, rx:rx_e] = inst_mask[ry:ry_e, rx:rx_e]
+                        inst_mask = roi_m
+
+                    M = cv2.moments(inst_mask)
+                    if M["m00"] > 0:
+                        cx = int(M["m10"] / M["m00"])
+                        cy = int(M["m01"] / M["m00"])
+                        area_px = int(M["m00"] / 255.0)
+                    else:
+                        cx, cy, area_px = w_img // 2, h_img // 2, 0
+
+                    chosen_inst = InstanceDetection(
+                        instance_id=0,
+                        class_id=0,
+                        class_name="bat_loi_di",
+                        confidence=best_score,
+                        bbox=(0, 0, w_img, h_img),
+                        mask=inst_mask,
+                        area_px=area_px,
+                        centroid=(cx, cy),
+                        bottom_y=h_img
+                    )
+                    return YoloResult(
+                        is_valid=True,
+                        chosen_mask=inst_mask,
+                        chosen_instance=chosen_inst,
+                        all_instances=[chosen_inst],
+                        chosen_index=0,
+                        chosen_confidence=best_score,
+                        inference_time_ms=inference_time_ms,
+                        model_name=os.path.basename(self.model_path or ""),
+                        class_names={0: "bat_loi_di"},
+                        frame_shape=(h_img, w_img),
+                        device_used=device_used,
+                        fallback_reason=fallback_reason
+                    )
+                else:
+                    return YoloResult(
+                        is_valid=True,
+                        chosen_mask=np.zeros((h_img, w_img), dtype=np.uint8),
+                        chosen_confidence=best_score,
+                        inference_time_ms=inference_time_ms,
+                        model_name=os.path.basename(self.model_path or ""),
+                        class_names={0: "bat_loi_di"},
+                        frame_shape=(h_img, w_img),
+                        device_used=device_used,
+                        fallback_reason=fallback_reason
+                    )
+            except Exception as e_direct:
+                # If direct fast NCNN encounters unexpected shapes, fallback cleanly to standard predict
+                pass
 
         try:
             # Predict with retina_masks=False + fast letterbox unpadding to avoid 118MB full-res tensor ops on CPU
