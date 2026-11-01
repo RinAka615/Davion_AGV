@@ -128,8 +128,8 @@ class YoloSegmenter:
         self._resolve_device(self.requested_device)
         try:
             import torch
-            # Số luồng PyTorch trên CPU (mặc định 4 luồng tối ưu hiệu năng trên Pi 5)
-            threads = int(os.environ.get("TORCH_NUM_THREADS", "4"))
+            # Giới hạn số luồng PyTorch trên CPU (mặc định 2 luồng để chống sụt áp nguồn Pi 5)
+            threads = int(os.environ.get("TORCH_NUM_THREADS", "2"))
             torch.set_num_threads(threads)
         except Exception:
             pass
