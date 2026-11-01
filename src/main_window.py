@@ -712,7 +712,7 @@ class MainWindow(QMainWindow):
         row_cfg = QHBoxLayout()
         row_cfg.addWidget(QLabel("Img Size:"))
         self.combo_imgsz = QComboBox()
-        self.combo_imgsz.addItems(["320", "416", "512", "640"])
+        self.combo_imgsz.addItems(["192", "256", "320", "416", "512", "640"])
         self.combo_imgsz.setCurrentText(str(self.yolo_imgsz))
         self.combo_imgsz.currentTextChanged.connect(self._on_yolo_imgsz_changed)
         row_cfg.addWidget(self.combo_imgsz)
@@ -1246,13 +1246,29 @@ class MainWindow(QMainWindow):
     def _on_select_model_clicked(self):
         default_dir = os.path.join(PROJECT_ROOT, "models")
         path, _ = QFileDialog.getOpenFileName(
-            self, "Chọn file model YOLO (.pt)", default_dir, "PyTorch Model (*.pt)"
+            self, "Chọn model YOLO (.pt, NCNN param, ONNX)", default_dir,
+            "Tất cả Model (*.pt *.onnx *.param *.xml);;PyTorch Model (*.pt);;NCNN Model (*.param);;Tất cả tệp (*)"
         )
         if path:
             self._load_yolo_model(path)
 
     def _load_yolo_model(self, path: str):
         self._stop_worker()
+        # Nếu chọn file .param/.bin của NCNN, lấy thư mục chứa
+        if path.endswith(".param") or path.endswith(".bin"):
+            path = os.path.dirname(path)
+
+        # Tự động đồng bộ Img Size phù hợp với model
+        if "256" in path:
+            self.yolo_imgsz = 256
+            self.combo_imgsz.setCurrentText("256")
+        elif "192" in path:
+            self.yolo_imgsz = 192
+            self.combo_imgsz.setCurrentText("192")
+        elif "320" in path:
+            self.yolo_imgsz = 320
+            self.combo_imgsz.setCurrentText("320")
+
         dev = self._get_selected_device()
         ok = self.segmenter.load_model(path, device=dev)
         self.lbl_model_name.setText(os.path.basename(path))
