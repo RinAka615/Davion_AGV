@@ -48,12 +48,9 @@ else
     fi
 fi
 
-if [ -f "$PROJECT_DIR/models/batden_fast_256.pt" ]; then
-    MODEL_FILE="$PROJECT_DIR/models/batden_fast_256.pt"
-    PROFILE_ARGS=(--profile "$PROJECT_DIR/profiles/batden_fast_profile.json" --imgsz 256)
-elif [ -f "$PROJECT_DIR/models/nhamang_batden_seg.pt" ]; then
+if [ -f "$PROJECT_DIR/models/nhamang_batden_seg.pt" ]; then
     MODEL_FILE="$PROJECT_DIR/models/nhamang_batden_seg.pt"
-    PROFILE_ARGS=(--profile "$PROJECT_DIR/profiles/nhamang_batden_profile.json" --imgsz 416)
+    PROFILE_ARGS=(--profile "$PROJECT_DIR/profiles/nhamang_batden_profile.json")
 else
     MODEL_FILE="$PROJECT_DIR/models/farm_path_bootstrap.pt"
     PROFILE_ARGS=()
