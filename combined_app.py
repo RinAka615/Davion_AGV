@@ -52,7 +52,11 @@ if CURRENT_DIR not in sys.path:
     sys.path.insert(0, CURRENT_DIR)
 
 # Import module Line Tracking
-from src.video_reader import find_orbbec_camera_index
+try:
+    from src.video_reader import find_orbbec_camera_index
+except ImportError:
+    def find_orbbec_camera_index(default: int = 2) -> int:
+        return default
 from src.yolo_segmenter import YoloSegmenter, is_cuda_available_and_working
 from src.path_detector import PathDetector, TrackingState, DetectionResult
 from src.main_window import draw_dashed_polyline, draw_dashed_line
