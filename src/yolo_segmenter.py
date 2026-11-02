@@ -129,8 +129,8 @@ class YoloSegmenter:
         self._resolve_device(self.requested_device)
         try:
             import torch
-            # Giới hạn số luồng PyTorch trên CPU (mặc định 3 luồng để tối ưu tốc độ và chừa 1 core)
-            threads = int(os.environ.get("TORCH_NUM_THREADS", "3"))
+            # Giới hạn số luồng PyTorch trên CPU (mặc định 2 luồng tối ưu cho Pi 5)
+            threads = int(os.environ.get("TORCH_NUM_THREADS", "2"))
             torch.set_num_threads(threads)
         except Exception:
             pass
@@ -190,31 +190,36 @@ class YoloSegmenter:
         self.is_ncnn = False
         self.ncnn_net = None
 
-        # Normalize if user picked a file inside an NCNN model directory
-        if model_path and (model_path.endswith(".param") or model_path.endswith(".bin") or os.path.basename(model_path) == "metadata.yaml"):
-            model_path = os.path.dirname(model_path)
+        # Kiểm tra nếu đường dẫn là file NCNN INT8 trực tiếp (.param / .bin)
+        direct_ncnn_file = None
+        if model_path and (model_path.endswith(".param") or model_path.endswith(".bin")):
+            param_candidate = model_path if model_path.endswith(".param") else model_path.rsplit(".", 1)[0] + ".param"
+            if os.path.isfile(param_candidate):
+                direct_ncnn_file = param_candidate
+
+        # Chuẩn hóa nếu chọn file bên trong thư mục model YOLO export (như model.ncnn.param / metadata.yaml)
+        if direct_ncnn_file is None:
+            if model_path and (model_path.endswith(".param") or model_path.endswith(".bin") or os.path.basename(model_path) == "metadata.yaml"):
+                model_path = os.path.dirname(model_path)
+
         self.model_path = model_path
         self.is_unet_int8 = False
 
-        if not os.path.exists(model_path):
+        if direct_ncnn_file is None and (not model_path or not os.path.exists(model_path)):
             self.load_error = f"File/thư mục model không tồn tại: {model_path}"
             return False
 
-        # Support direct MobileNetV3-UNet INT8 NCNN models (.param / .bin)
-        if "model_int8" in model_path.lower() or model_path.endswith(".param") or (os.path.isdir(model_path) and os.path.exists(os.path.join(model_path, "model_int8.param"))):
+        # Nạp mô hình NCNN INT8 siêu nhẹ (Fast-SCNN, YOLO-Fastest V2, PicoDet, UNet INT8)
+        if direct_ncnn_file is not None or (model_path and os.path.isdir(model_path) and os.path.exists(os.path.join(model_path, "model_int8.param"))):
             try:
                 import ncnn
                 self.is_unet_int8 = True
                 self.is_ncnn = True
-                param_path = model_path if model_path.endswith(".param") else (
-                    os.path.join(model_path, "model_int8.param") if os.path.isdir(model_path) else (
-                        model_path if os.path.isfile(model_path) else model_path + ".param"
-                    )
-                )
+                param_path = direct_ncnn_file or os.path.join(model_path, "model_int8.param")
                 bin_path = param_path.rsplit(".", 1)[0] + ".bin"
                 net = ncnn.Net()
                 net.opt.use_vulkan_compute = False
-                n_threads = int(os.environ.get("OMP_NUM_THREADS", "3"))
+                n_threads = int(os.environ.get("OMP_NUM_THREADS", "2"))
                 net.opt.num_threads = n_threads
                 net.opt.use_int8_inference = True
                 if net.load_param(param_path) == 0 and net.load_model(bin_path) == 0:
@@ -225,7 +230,8 @@ class YoloSegmenter:
                     self.imgsz = 320
                     self.device = "cpu"
                     self.effective_device = "cpu"
-                    self.device_display_name = f"UNet INT8 NCNN ({get_cpu_info()})"
+                    model_base = os.path.basename(param_path)
+                    self.device_display_name = f"{model_base} ({get_cpu_info()})"
                     self.prev_chosen_centroid = None
                     return True
                 else:

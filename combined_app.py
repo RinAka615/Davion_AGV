@@ -942,9 +942,27 @@ class CombinedRobotApp(QMainWindow):
         # -------------------------------------------------------------
         qr_conf = self.slider_qr_conf.value() / 100.0
         self.qr_detector.enable_dewarp = self.chk_qr_dewarp.isChecked()
-        qr_results = self.qr_detector.detect_and_decode(frame, confidence=qr_conf)
-        if not self.chk_qr_candidates.isChecked():
-            qr_results = [r for r in qr_results if r.is_decoded]
+
+        # Tối ưu nhịp quét QR trên CPU Pi 5:
+        # - Nếu đang bám mã QR: Quét liên tục mỗi frame để dẫn hướng tâm QR mượt mà.
+        # - Nếu đang bám đường bình thường: Quét xen kẽ mỗi 2 frame (15 Hz) để đẩy FPS lên ~25-30 FPS.
+        if not hasattr(self, "_qr_frame_count"):
+            self._qr_frame_count = 0
+            self._cached_qr_results = []
+        self._qr_frame_count += 1
+
+        should_scan_qr = (
+            len(self._cached_qr_results) > 0 or
+            (self._qr_frame_count % 2 == 0)
+        )
+
+        if should_scan_qr:
+            qr_results = self.qr_detector.detect_and_decode(frame, confidence=qr_conf)
+            if not self.chk_qr_candidates.isChecked():
+                qr_results = [r for r in qr_results if r.is_decoded]
+            self._cached_qr_results = qr_results
+        else:
+            qr_results = self._cached_qr_results
 
         elapsed_ms = (time.time() - t0) * 1000.0
         fps_current = 1000.0 / elapsed_ms if elapsed_ms > 0 else 0.0
