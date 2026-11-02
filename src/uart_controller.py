@@ -9,8 +9,13 @@ import os
 import struct
 import threading
 import time
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 import serial
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 
 def calculate_xor_checksum(payload: str) -> str:
@@ -152,18 +157,21 @@ class UartController:
     def format_union_5b_packet(
         self,
         offset_px: Optional[float],
-        is_detected: bool,
+        is_detected: Union[bool, int],
         union_type: Optional[str] = None
     ) -> Tuple[bytes, str]:
         """Constructs a 5-byte binary packet:
         - Bytes 0..3: 4 bytes from union (lateral offset in px: negative=left, positive=right)
-        - Byte 4: 1 byte boolean flag (1: line detected, 0: not detected)
+        - Byte 4: 1 byte flag (0: run, 1: stop, 2: turn left, etc.)
 
         Returns (packet_bytes, display_string)
         """
         u_type = union_type or self.union_type
         off = float(offset_px) if offset_px is not None else 0.0
-        det_val = 1 if is_detected else 0
+        if (isinstance(is_detected, int) or (np is not None and isinstance(is_detected, np.integer))) and not isinstance(is_detected, bool):
+            det_val = int(is_detected) & 0xFF
+        else:
+            det_val = 1 if is_detected else 0
 
         if u_type == self.UNION_TYPE_INT32:
             offset_bytes = struct.pack('<i', int(round(off)))
@@ -203,7 +211,7 @@ class UartController:
         confidence_pct: float = 0.0,
         target_x: Optional[int] = None,
         target_y: Optional[int] = None,
-        is_detected: Optional[bool] = None
+        is_detected: Optional[Union[bool, int]] = None
     ) -> bool:
         """Thread-safe rate-limited transmission to STM32 (every 0.1s by default)."""
         if not self.is_enabled:
@@ -263,10 +271,52 @@ class UartController:
                 self.ser = None
                 return False
 
-    def send_union_update(self, offset_px: Optional[float], is_detected: bool) -> bool:
+    def send_union_update(self, offset_px: Optional[float], is_detected: Union[bool, int]) -> bool:
         """Convenience method specifically for sending the 5-byte union packet."""
+        flag_val = int(is_detected) if (isinstance(is_detected, int) and not isinstance(is_detected, bool)) else (1 if is_detected else 0)
         return self.send_nav_update(
-            state_code=self.STATE_TRACKING if is_detected else self.STATE_LOST,
+            state_code=self.STATE_TRACKING if flag_val != 0 else self.STATE_LOST,
             offset_px=offset_px,
             is_detected=is_detected
         )
+
+    def read_telemetry(self) -> Optional[dict]:
+        """Đọc và phân tích gói tin phản hồi trạng thái từ STM32 ($RC,auto_forward,stm_qr_state)."""
+        with self._lock:
+            if not self.is_connected or self.ser is None:
+                return None
+            try:
+                if self.ser.in_waiting > 0:
+                    raw = self.ser.read(self.ser.in_waiting)
+                    if not hasattr(self, "_rx_buf"):
+                        self._rx_buf = bytearray()
+                    self._rx_buf.extend(raw)
+
+                    # Giữ bộ đệm không quá 512 bytes
+                    if len(self._rx_buf) > 512:
+                        self._rx_buf = self._rx_buf[-256:]
+
+                    latest_dict = None
+                    while b"\n" in self._rx_buf:
+                        idx = self._rx_buf.index(b"\n")
+                        line_bytes = self._rx_buf[:idx].strip()
+                        del self._rx_buf[:idx + 1]
+
+                        try:
+                            line = line_bytes.decode("ascii", errors="ignore").strip()
+                            if line.startswith("$RC,"):
+                                parts = line.split(",")
+                                if len(parts) >= 3:
+                                    auto_fwd = int(parts[1])
+                                    qr_state = int(parts[2])
+                                    latest_dict = {
+                                        "auto_forward": auto_fwd,
+                                        "stm_qr_state": qr_state
+                                    }
+                        except Exception:
+                            pass
+
+                    return latest_dict
+            except Exception:
+                pass
+            return None

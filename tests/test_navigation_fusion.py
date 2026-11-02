@@ -16,7 +16,9 @@ from src.path_detector import DetectionResult, TrackingState
 from src.navigation_fusion import (
     FusedNavigationTarget,
     check_qr_exceeds_threshold,
-    fuse_navigation_target
+    fuse_navigation_target,
+    QRTurnMissionManager,
+    QRTurnMissionState
 )
 from src.uart_controller import UartController
 
@@ -71,81 +73,81 @@ def create_mock_path_result(
 
 
 def test_qr_size_threshold_check():
-    """Kiểm tra điều kiện kích thước và diện tích đường bao > 60x60."""
-    # 1. Mã QR nhỏ (40x40 = 1600 px^2 < 3600 px^2) -> False
-    small_qr = create_mock_qr(cx=300, cy=300, width=40, height=40)
-    is_over, bw, bh, area = check_qr_exceeds_threshold(small_qr, min_dim=60.0)
-    assert is_over is False, f"Expected False for 40x40 QR, got {is_over}"
-    assert area == 1600.0
-
-    # 2. Mã QR lớn (80x80 = 6400 px^2 > 3600 px^2) -> True
-    large_qr = create_mock_qr(cx=300, cy=300, width=80, height=80)
-    is_over, bw, bh, area = check_qr_exceeds_threshold(large_qr, min_dim=60.0)
-    assert is_over is True, f"Expected True for 80x80 QR, got {is_over}"
+    """Kiểm tra điều kiện kích thước và diện tích đường bao > 100x100."""
+    # 1. Mã QR nhỏ (80x80 = 6400 px^2 < 10000 px^2) -> False
+    small_qr = create_mock_qr(cx=300, cy=300, width=80, height=80)
+    is_over, bw, bh, area = check_qr_exceeds_threshold(small_qr, min_dim=100.0)
+    assert is_over is False, f"Expected False for 80x80 QR, got {is_over}"
     assert area == 6400.0
 
-    # 3. Mã QR cận ngưỡng chuẩn (60x60 = 3600 px^2) -> True
-    boundary_qr = create_mock_qr(cx=300, cy=300, width=60, height=60)
-    is_over, bw, bh, area = check_qr_exceeds_threshold(boundary_qr, min_dim=60.0)
-    assert is_over is True, f"Expected True for 60x60 QR, got {is_over}"
+    # 2. Mã QR lớn (140x140 = 19600 px^2 > 10000 px^2) -> True
+    large_qr = create_mock_qr(cx=300, cy=300, width=140, height=140)
+    is_over, bw, bh, area = check_qr_exceeds_threshold(large_qr, min_dim=100.0)
+    assert is_over is True, f"Expected True for 140x140 QR, got {is_over}"
+    assert area == 19600.0
 
-    print("[PASS] test_qr_size_threshold_check: Size & area threshold logic (> 60x60) 100% verified")
+    # 3. Mã QR cận ngưỡng chuẩn (100x100 = 10000 px^2) -> True
+    boundary_qr = create_mock_qr(cx=300, cy=300, width=100, height=100)
+    is_over, bw, bh, area = check_qr_exceeds_threshold(boundary_qr, min_dim=100.0)
+    assert is_over is True, f"Expected True for 100x100 QR, got {is_over}"
+
+    print("[PASS] test_qr_size_threshold_check: Size & area threshold logic (> 100x100) 100% verified")
 
 
 def test_fusion_normal_path_when_qr_small():
-    """Khi QR còn ở xa (< 60x60), hệ thống phải bám theo tâm của lối đi."""
+    """Khi QR còn ở xa (< 100x100), hệ thống phải bám theo tâm của lối đi."""
     frame_shape = (720, 1280)  # w = 1280, cam_cx = 640
     path_res = create_mock_path_result(path_center_x=620, ref_y=500, offset_px=-20.0)
-    small_qr = create_mock_qr(cx=750, cy=200, width=45, height=45)
+    small_qr = create_mock_qr(cx=750, cy=200, width=75, height=75)
 
     fused = fuse_navigation_target(
         path_res=path_res,
         qr_results=[small_qr],
         frame_shape=frame_shape,
-        min_qr_size=60.0
+        min_qr_size=100.0
     )
 
-    assert fused.is_qr_mode is False, "Should NOT switch to QR mode for small QR (< 60x60)"
+    assert fused.is_qr_mode is False, "Should NOT switch to QR mode for small QR (< 100x100)"
     assert fused.target_pt == (620, 500), f"Expected path target (620, 500), got {fused.target_pt}"
     assert fused.lateral_offset_px == -20.0, f"Expected offset -20.0, got {fused.lateral_offset_px}"
     print("[PASS] test_fusion_normal_path_when_qr_small: Correctly maintained path tracking")
 
 
 def test_fusion_switches_to_qr_center_when_qr_large():
-    """Khi QR đến gần (> 60x60), hệ thống phải chuyển sang tính sai số theo tâm QR."""
+    """Khi QR đến gần (> 100x100), hệ thống phải chuyển sang tính sai số theo tâm QR."""
     frame_shape = (720, 1280)  # w = 1280, cam_cx = 640
     # Lối đi đang có tâm tại x = 600 (lệch -40px)
     path_res = create_mock_path_result(path_center_x=600, ref_y=500, offset_px=-40.0)
 
-    # Mã QR trạm dừng có tâm tại x = 700, y = 350, kích thước 75x75 (> 60x60)
+    # Mã QR trạm dừng có tâm tại x = 700, y = 350, kích thước 120x120 (> 100x100)
     # Độ lệch so với tâm camera (640) phải là: 700 - 640 = +60.0 px (Lệch phải)
-    large_qr = create_mock_qr(cx=700.0, cy=350.0, width=75.0, height=75.0)
+    large_qr = create_mock_qr(cx=700.0, cy=350.0, width=120.0, height=120.0)
 
     fused = fuse_navigation_target(
         path_res=path_res,
         qr_results=[large_qr],
         frame_shape=frame_shape,
-        min_qr_size=60.0
+        min_qr_size=100.0
     )
 
-    assert fused.is_qr_mode is True, "Must switch to QR mode when QR size > 60x60"
+    assert fused.is_qr_mode is True, "Must switch to QR mode when QR size > 100x100"
     assert fused.target_pt == (700, 350), f"Expected target (700, 350), got {fused.target_pt}"
     assert abs(fused.lateral_offset_px - 60.0) < 1e-3, f"Expected offset +60.0, got {fused.lateral_offset_px}"
     assert "Lệch phải 60.0 px (Theo tâm QR)" in fused.offset_direction
-    print(f"[PASS] test_fusion_switches_to_qr_center_when_qr_large: Successfully switched to QR center (> 60x60) (Offset={fused.lateral_offset_px:+.1f}px)")
+    print(f"[PASS] test_fusion_switches_to_qr_center_when_qr_large: Successfully switched to QR center (> 100x100) (Offset={fused.lateral_offset_px:+.1f}px)")
 
 
 def test_fusion_handles_no_path_with_large_qr():
-    """Ngay cả khi lối đi bị mất (lost), nếu thấy QR lớn (> 60x60) thì vẫn điều hướng chuẩn theo tâm QR."""
+    """Ngay cả khi lối đi bị mất (lost), nếu thấy QR lớn (> 100x100) thì vẫn điều hướng chuẩn theo tâm QR."""
     frame_shape = (720, 1280)
     path_res = None  # Không có lối đi
-    large_qr = create_mock_qr(cx=640.0, cy=400.0, width=80.0, height=80.0)
+    large_qr = create_mock_qr(cx=640.0, cy=400.0, width=130.0, height=130.0)
 
     fused = fuse_navigation_target(
         path_res=path_res,
         qr_results=[large_qr],
         frame_shape=frame_shape,
-        min_qr_size=60.0
+        min_qr_size=100.0
     )
 
     assert fused.is_qr_mode is True
@@ -159,13 +161,13 @@ def test_fusion_respects_override_toggle():
     """Kiểm tra khi người dùng tắt checkbox ghi đè QR (enable_qr_override=False)."""
     frame_shape = (720, 1280)
     path_res = create_mock_path_result(path_center_x=600, ref_y=500, offset_px=-40.0)
-    large_qr = create_mock_qr(cx=700.0, cy=350.0, width=80.0, height=80.0)
+    large_qr = create_mock_qr(cx=700.0, cy=350.0, width=120.0, height=120.0)
 
     fused = fuse_navigation_target(
         path_res=path_res,
         qr_results=[large_qr],
         frame_shape=frame_shape,
-        min_qr_size=60.0,
+        min_qr_size=100.0,
         enable_qr_override=False  # Người dùng tắt tính năng
     )
 
@@ -190,7 +192,7 @@ def test_uart_flag_byte_qr_over_200x200():
         path_res=path_res,
         qr_results=[huge_qr],
         frame_shape=frame_shape,
-        min_qr_size=60.0,
+        min_qr_size=100.0,
         qr_stop_thresh=200.0
     )
 
@@ -210,27 +212,27 @@ def test_uart_flag_byte_qr_over_200x200():
     print(f"[PASS] test_uart_flag_byte_qr_over_200x200: Successfully triggered STOP station (Byte 4 = {pkt[4]}, Packet: {disp})")
 
 
-def test_uart_flag_byte_qr_between_60_and_200():
+def test_uart_flag_byte_qr_between_100_and_200():
     """
-    Khi QR ở giữa 60x60 và 200x200 (ví dụ 100x100):
-    - Đã chuyển sang lái theo tâm QR (> 60x60).
+    Khi QR ở giữa 100x100 và 200x200 (ví dụ 150x150):
+    - Đã chuyển sang lái theo tâm QR (> 100x100).
     - Nhưng CHƯA đạt ngưỡng trạm dừng (<= 200x200) -> uart_flag_byte = 0 (Byte 4 = 0x00).
     - Sai số lái vẫn được gửi bình thường qua Bytes 0..3 (theo tâm QR).
     """
     frame_shape = (720, 1280)
-    mid_qr = create_mock_qr(cx=680.0, cy=360.0, width=100.0, height=100.0)
+    mid_qr = create_mock_qr(cx=680.0, cy=360.0, width=150.0, height=150.0)
     path_res = create_mock_path_result(path_center_x=620, ref_y=500, offset_px=-20.0)
 
     fused = fuse_navigation_target(
         path_res=path_res,
         qr_results=[mid_qr],
         frame_shape=frame_shape,
-        min_qr_size=60.0,
+        min_qr_size=100.0,
         qr_stop_thresh=200.0
     )
 
-    assert fused.is_qr_mode is True, "Must be in QR mode since 100x100 > 60x60"
-    assert fused.qr_stop_triggered is False, "qr_stop_triggered must be False since 100x100 <= 200x200"
+    assert fused.is_qr_mode is True, "Must be in QR mode since 150x150 > 100x100"
+    assert fused.qr_stop_triggered is False, "qr_stop_triggered must be False since 150x150 <= 200x200"
     assert fused.uart_flag_byte == 0, "uart_flag_byte must be 0 since QR <= 200x200"
     assert abs(fused.lateral_offset_px - 40.0) < 1e-3
 
@@ -245,7 +247,7 @@ def test_uart_flag_byte_qr_between_60_and_200():
     import struct
     unpacked_offset = struct.unpack('<f', pkt[0:4])[0]
     assert abs(unpacked_offset - 40.0) < 1e-3, f"Expected offset in Bytes 0..3 = 40.0, got {unpacked_offset}"
-    print(f"[PASS] test_uart_flag_byte_qr_between_60_and_200: Byte 4 = 0, Steering preserved ({unpacked_offset:+.1f}px) (Packet: {disp})")
+    print(f"[PASS] test_uart_flag_byte_qr_between_100_and_200: Byte 4 = 0, Steering preserved ({unpacked_offset:+.1f}px) (Packet: {disp})")
 
 
 def test_uart_flag_byte_ignores_path_condition():
@@ -262,7 +264,7 @@ def test_uart_flag_byte_ignores_path_condition():
         path_res=path_res,
         qr_results=[],
         frame_shape=frame_shape,
-        min_qr_size=60.0,
+        min_qr_size=100.0,
         qr_stop_thresh=200.0
     )
     assert fused_no_qr.uart_flag_byte == 0, "Byte 4 must be 0 even if path is tracking!"
@@ -283,7 +285,7 @@ def test_uart_flag_byte_ignores_path_condition():
         path_res=None,
         qr_results=[],
         frame_shape=frame_shape,
-        min_qr_size=60.0,
+        min_qr_size=100.0,
         qr_stop_thresh=200.0
     )
     assert fused_lost.uart_flag_byte == 0
@@ -297,6 +299,149 @@ def test_uart_flag_byte_ignores_path_condition():
     print("[PASS] test_uart_flag_byte_ignores_path_condition: Verified Byte 4 is strictly 0 when QR <= 200x200 regardless of path state")
 
 
+def test_uart_packet_multimode_flags():
+    """Kiểm tra UartController đóng gói chính xác 3 chế độ Byte 4:
+    0: Chạy bám đường bình thường
+    1: Trạm TURN_1 (Kích hoạt dừng 1.0s và tự quay trái trên STM32)
+    2: Đã bắt trúng tâm TURN_2 (Dừng hoàn tất)
+    """
+    import struct
+    uart = UartController()
+
+    # Byte 4 = 0 (Chạy)
+    pkt0, disp0 = uart.format_union_5b_packet(offset_px=12.5, is_detected=0)
+    assert pkt0[4] == 0, f"Expected Byte 4 == 0, got {pkt0[4]}"
+    assert abs(struct.unpack('<f', pkt0[0:4])[0] - 12.5) < 1e-4
+
+    # Byte 4 = 1 (Trạm TURN_1)
+    pkt1, disp1 = uart.format_union_5b_packet(offset_px=0.0, is_detected=1)
+    assert pkt1[4] == 1, f"Expected Byte 4 == 1, got {pkt1[4]}"
+    assert abs(struct.unpack('<f', pkt1[0:4])[0] - 0.0) < 1e-4
+
+    # Byte 4 = 2 (Đã bắt tâm TURN_2)
+    pkt2, disp2 = uart.format_union_5b_packet(offset_px=15.0, is_detected=2)
+    assert pkt2[4] == 2, f"Expected Byte 4 == 2, got {pkt2[4]}"
+    assert abs(struct.unpack('<f', pkt2[0:4])[0] - 15.0) < 1e-4
+
+    # Byte 4 = 3 (Đến trạm TURN_2: Dừng 500ms và xoay phải tìm đường)
+    pkt3, disp3 = uart.format_union_5b_packet(offset_px=0.0, is_detected=3)
+    assert pkt3[4] == 3, f"Expected Byte 4 == 3, got {pkt3[4]}"
+    assert abs(struct.unpack('<f', pkt3[0:4])[0] - 0.0) < 1e-4
+
+    print("[PASS] test_uart_packet_multimode_flags: 4 modes (0=Run, 1=TURN_1 station, 2=TURN_2 center, 3=Turn right seek path) correctly encoded into UART packet")
+
+
+def test_qr_turn_mission_lifecycle():
+    """Kiểm tra toàn bộ chu trình máy trạng thái rẽ QR phân tầng (QRTurnMissionManager):
+    IDLE -> Đạt trạm TURN_1 (>=200px, Gửi B4=1) -> STM32 tự delay 1s & quay trái (B4=0)
+    -> Bắt trúng tâm TURN_2 (<=40px, Gửi B4=2) -> Dừng 500ms triệt tiêu quán tính (B4=2)
+    -> Tiến theo tâm TURN_2 (B4=0) -> Đạt trạm TURN_2 (>=200px, Gửi B4=1) -> DỪNG HOÀN TẤT -> RESET
+    """
+    frame_shape = (720, 1280)  # cam_cx = 640
+    mission = QRTurnMissionManager(
+        stop_duration_sec=1.0,
+        pause_center_sec=0.5,
+        align_tolerance_px=40.0,
+        min_stop_qr_dim=200.0
+    )
+
+    # 1. Ban đầu: Trạng thái IDLE
+    assert mission.state == QRTurnMissionState.IDLE
+    path_res = create_mock_path_result(path_center_x=640, ref_y=500, offset_px=0.0)
+    base_nav = fuse_navigation_target(path_res=path_res, qr_results=[], frame_shape=frame_shape)
+
+    # 2. Tiếp cận TURN_1 nhưng kích thước còn nhỏ (< 200px, vd 120x120)
+    qr_turn1_small = create_mock_qr(cx=640, cy=400, width=120, height=120, text="TURN_1")
+    base_nav = fuse_navigation_target(path_res=path_res, qr_results=[qr_turn1_small], frame_shape=frame_shape)
+    nav_out = mission.process(base_nav, [qr_turn1_small], frame_shape, now=1.0)
+    assert mission.state == QRTurnMissionState.IDLE
+    assert nav_out.uart_flag_byte == 0, "Chưa dừng khi TURN_1 < 200px"
+
+    # 3. Tiếp cận TURN_1 kích thước lớn (>= 200px, vd 210x210): Phát hiện trạm TURN_1!
+    qr_turn1_large = create_mock_qr(cx=640, cy=400, width=210, height=210, text="TURN_1")
+    base_nav = fuse_navigation_target(path_res=path_res, qr_results=[qr_turn1_large], frame_shape=frame_shape)
+    nav_out = mission.process(base_nav, [qr_turn1_large], frame_shape, now=2.0)
+    assert mission.state == QRTurnMissionState.TURNING_LEFT_SEEK_TURN2
+    assert nav_out.uart_flag_byte == 1, "Kích hoạt trạm TURN_1: Gửi Byte 4 = 1 để STM32 tự delay 1s và quay trái"
+    assert nav_out.qr_stop_triggered is True
+
+    # 4. Robot đang quay trái trên STM32: Camera chưa thấy TURN_2 (frame rỗng)
+    nav_out = mission.process(base_nav, [], frame_shape, now=3.0)
+    assert mission.state == QRTurnMissionState.TURNING_LEFT_SEEK_TURN2
+    assert nav_out.uart_flag_byte == 0, "Chưa thấy TURN_2 -> Gửi Byte 4 = 0 để STM32 tiếp tục quay trái"
+
+    # 5. Camera bắt đầu thấy TURN_2 nhưng chưa vào tâm (cx = 780, offset = +140px > 40px)
+    qr_turn2_far = create_mock_qr(cx=780, cy=360, width=150, height=150, text="TURN_2")
+    nav_out = mission.process(base_nav, [qr_turn2_far], frame_shape, now=3.5)
+    assert mission.state == QRTurnMissionState.TURNING_LEFT_SEEK_TURN2
+    assert nav_out.uart_flag_byte == 0, "Thấy TURN_2 nhưng chưa vào tâm -> Vẫn gửi Byte 4 = 0 để STM32 quay tiếp"
+    assert abs(nav_out.lateral_offset_px - 140.0) < 1e-3
+
+    # 6. TURN_2 đã vào đúng tâm camera (cx = 655, offset = +15px <= 40px) -> BẮT ĐƯỢC TÂM & BẮT ĐẦU DỪNG 500MS!
+    qr_turn2_centered = create_mock_qr(cx=655, cy=360, width=165, height=165, text="TURN_2")
+    nav_out = mission.process(base_nav, [qr_turn2_centered], frame_shape, now=10.0)
+    assert mission.state == QRTurnMissionState.APPROACHING_TURN2
+    assert nav_out.uart_flag_byte == 2, "Bắt trúng tâm TURN_2 -> Gửi Byte 4 = 2 để STM32 dừng 500ms"
+    assert abs(nav_out.lateral_offset_px - 15.0) < 1e-3
+
+    # 7. Trong khoảng 500ms dừng triệt tiêu quán tính (now = 10.2s, dt = 200ms < 500ms)
+    nav_out = mission.process(base_nav, [qr_turn2_centered], frame_shape, now=10.2)
+    assert mission.state == QRTurnMissionState.APPROACHING_TURN2
+    assert nav_out.uart_flag_byte == 2, "Vẫn trong khoảng 500ms dừng quán tính -> Gửi Byte 4 = 2"
+
+    # 8. Hết 500ms (now = 10.6s, dt = 600ms >= 500ms): Bắt đầu tiến theo tâm TURN_2!
+    nav_out = mission.process(base_nav, [qr_turn2_centered], frame_shape, now=10.6)
+    assert mission.state == QRTurnMissionState.APPROACHING_TURN2
+    assert nav_out.uart_flag_byte == 0, "Hết 500ms -> Gửi Byte 4 = 0 để STM32 tiến lên theo tâm TURN_2 qua PID"
+    assert abs(nav_out.lateral_offset_px - 15.0) < 1e-3
+
+    # 9. Tiếp cận TURN_2 và kích thước đạt trạm dừng (>= 200px, vd 210x210):
+    # KÍCH HOẠT BƯỚC MỚI: DỪNG 500MS VÀ XOAY PHẢI TÌM ĐƯỜNG (Byte 4 = 3)!
+    qr_turn2_reached = create_mock_qr(cx=645, cy=400, width=210, height=210, text="TURN_2")
+    nav_out = mission.process(base_nav, [qr_turn2_reached], frame_shape, now=12.0)
+    assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH
+    assert nav_out.uart_flag_byte == 3, "Đã đến trạm TURN_2 (>=200px) -> Gửi Byte 4 = 3 để STM32 dừng 500ms rồi xoay phải tìm đường"
+
+    # 10. Trong 500ms dừng triệt tiêu quán tính tại TURN_2 (now = 12.3s, dt = 300ms < 500ms)
+    nav_out = mission.process(base_nav, [], frame_shape, now=12.3)
+    assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH
+    assert nav_out.uart_flag_byte == 3, "Đang trong 500ms dừng tại trạm TURN_2 -> Gửi Byte 4 = 3"
+
+    # 11. Hết 500ms: STM32 xoay phải tìm đường, camera chưa thấy đường (now = 12.8s)
+    nav_out = mission.process(base_nav, [], frame_shape, now=12.8)
+    assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH
+    assert nav_out.uart_flag_byte == 3, "Đang xoay phải tìm đường -> Tiếp tục gửi Byte 4 = 3"
+
+    # 12. Frame 1: Camera bắt đầu phát hiện lối đi mới (now = 13.0s, frame 1)
+    path_new = create_mock_path_result(path_center_x=650, ref_y=500, offset_px=10.0)
+    base_nav_new = fuse_navigation_target(path_res=path_new, qr_results=[], frame_shape=frame_shape)
+    nav_out = mission.process(base_nav_new, [], frame_shape, path_res=path_new, now=13.0)
+    assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH
+    assert nav_out.uart_flag_byte == 3, "Khung hình 1 phát hiện đường -> Đang xác nhận ổn định (chống nhiễu)"
+
+    # 13. Frame 2: Xác nhận phát hiện luống đường ổn định (now = 13.1s, frame 2)
+    # -> DỪNG HẲN HOÀN TẤT NHIỆM VỤ (Byte 4 = 1, KHÔNG CHẠY BÁM ĐƯỜNG LẠI)!
+    nav_out = mission.process(base_nav_new, [], frame_shape, path_res=path_new, now=13.1)
+    assert mission.state == QRTurnMissionState.COMPLETED_STOPPED, "Đã thấy luống -> Dừng hẳn hoàn tất nhiệm vụ (COMPLETED_STOPPED)!"
+    assert nav_out.uart_flag_byte == 1, "Báo STM32 dừng hẳn tuyệt đối (Byte 4 = 1)"
+    assert nav_out.mode_name == "COMPLETED_STOPPED"
+    assert nav_out.qr_stop_triggered is True
+
+    # 14. Kiểm tra xe tiếp tục đứng yên ở COMPLETED_STOPPED
+    nav_out = mission.process(base_nav_new, [], frame_shape, path_res=path_new, now=14.0)
+    assert mission.state == QRTurnMissionState.COMPLETED_STOPPED
+    assert nav_out.uart_flag_byte == 1, "Vẫn giữ dừng tuyệt đối (Byte 4 = 1), không tự động chạy lại"
+
+    # 15. Test Reset thủ công (khi người dùng bấm Reset trên UI hoặc gạt switch)
+    mission.reset()
+    assert mission.state == QRTurnMissionState.IDLE
+    base_nav_cleared = fuse_navigation_target(path_res=path_res, qr_results=[], frame_shape=frame_shape)
+    nav_out = mission.process(base_nav_cleared, [], frame_shape, now=16.0)
+    assert nav_out.uart_flag_byte == 0
+
+    print("[PASS] test_qr_turn_mission_lifecycle: Full QR turn mission cycle (IDLE -> TURN_1 B4=1 -> SEEK TURN_2 B4=0 -> CENTERED TURN_2 B4=2 -> PAUSE 500ms B4=2 -> APPROACH B4=0 -> REACH TURN_2 >=200px B4=3 -> PAUSE 500ms B4=3 -> ROTATE RIGHT B4=3 -> DETECT PATH B4=1 -> STOP COMPLETELY) 100% verified")
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("RUNNING AUTOMATED TEST SUITE FOR NAVIGATION FUSION")
@@ -307,9 +452,11 @@ if __name__ == "__main__":
     test_fusion_handles_no_path_with_large_qr()
     test_fusion_respects_override_toggle()
     test_uart_flag_byte_qr_over_200x200()
-    test_uart_flag_byte_qr_between_60_and_200()
+    test_uart_flag_byte_qr_between_100_and_200()
     test_uart_flag_byte_ignores_path_condition()
+    test_uart_packet_multimode_flags()
+    test_qr_turn_mission_lifecycle()
     print("=" * 60)
-    print("ALL 8 NAVIGATION FUSION TESTS PASSED 100%!")
+    print("ALL 10 NAVIGATION FUSION TESTS PASSED 100%!")
     print("=" * 60)
 

@@ -52,11 +52,18 @@ if CURRENT_DIR not in sys.path:
     sys.path.insert(0, CURRENT_DIR)
 
 # Import module Line Tracking
+from src.video_reader import find_orbbec_camera_index
 from src.yolo_segmenter import YoloSegmenter, is_cuda_available_and_working
 from src.path_detector import PathDetector, TrackingState, DetectionResult
 from src.main_window import draw_dashed_polyline, draw_dashed_line
 from src.uart_controller import UartController
-from src.navigation_fusion import FusedNavigationTarget, fuse_navigation_target, check_qr_exceeds_threshold
+from src.navigation_fusion import (
+    FusedNavigationTarget,
+    fuse_navigation_target,
+    check_qr_exceeds_threshold,
+    QRTurnMissionManager,
+    QRTurnMissionState
+)
 
 # Import module QR Scanner
 from qr_scanner import QRDetector, QRJsonLogger, QRVisualizer, QRDetectionResult
@@ -185,7 +192,7 @@ QTextEdit {
 
 
 class CombinedRobotApp(QMainWindow):
-    def __init__(self, initial_video: Optional[str] = None):
+    def __init__(self, initial_video: Optional[str] = None, initial_uart: bool = False):
         super().__init__()
         self.setWindowTitle("Robot Nông Nghiệp: Hệ Thống Tích Hợp Dò Đường & Quét Mã QR")
         self.resize(1360, 880)
@@ -216,29 +223,34 @@ class CombinedRobotApp(QMainWindow):
         self.logger = QRJsonLogger(log_path="output_qr/combined_mission_events.jsonl", dedup_cooldown_sec=2.0)
 
         # --- 3. ĐIỀU KHIỂN TRUYỀN THÔNG UART STM32 ---
-        self.uart = UartController(port="/dev/ttySTM32", baudrate=115200, is_enabled=True)
+        self.uart = UartController(port="/dev/ttySTM32", baudrate=115200, is_enabled=initial_uart)
+        if initial_uart:
+            self.uart.connect()
 
         # Timer vòng lặp hiển thị
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._on_timer_tick)
 
-        self._init_ui()
-        self.chk_uart_enable.setChecked(True)
+        # --- 4. MÁY TRẠNG THÁI NHIỆM VỤ CHUYỂN HƯỚNG QR (TURN 1 -> TURN 2) ---
+        self.qr_mission = QRTurnMissionManager(
+            stop_duration_sec=1.0,
+            align_tolerance_px=40.0,
+            min_stop_qr_dim=200.0,
+            auto_reset_delay_sec=3.0
+        )
 
-        # Tự động ưu tiên mở Webcam USB nếu đang cắm (/dev/video0..9), nếu chưa cắm thì nạp video mẫu
-        has_usb_cam = any(os.path.exists(f"/dev/video{i}") for i in range(10))
-        if has_usb_cam:
-            self._open_webcam()
-        if not self.is_camera:
-            if initial_video and os.path.exists(initial_video):
-                self.load_source(initial_video)
-            else:
-                default_vid = os.path.join(CURRENT_DIR, "nhamang_20261025_030235.mp4")
-                test_vid = os.path.join(CURRENT_DIR, "test_qr_dataset", "test_qr_multiscene.mp4")
-                if os.path.exists(default_vid):
-                    self.load_source(default_vid)
-                elif os.path.exists(test_vid):
-                    self.load_source(test_vid)
+        self._init_ui()
+
+        # Nạp video mẫu
+        if initial_video and os.path.exists(initial_video):
+            self.load_source(initial_video)
+        else:
+            default_vid = os.path.join(CURRENT_DIR, "nhamang_20261025_030235.mp4")
+            test_vid = os.path.join(CURRENT_DIR, "test_qr_dataset", "test_qr_multiscene.mp4")
+            if os.path.exists(default_vid):
+                self.load_source(default_vid)
+            elif os.path.exists(test_vid):
+                self.load_source(test_vid)
 
     def _load_best_yolo_model(self):
         models = [
@@ -254,7 +266,7 @@ class CombinedRobotApp(QMainWindow):
             if os.path.exists(m):
                 success = self.yolo.load_model(m, device=self.device)
                 if success:
-                    print(f"[COMBINED APP] Đã nạp thành công model YOLO ({self.yolo.device_display_name}): {os.path.basename(m)}")
+                    print(f"[COMBINED APP] Đã nạp thành công model YOLO ({self.device}): {os.path.basename(m)}")
                     break
 
     def _init_ui(self):
@@ -339,6 +351,16 @@ class CombinedRobotApp(QMainWindow):
         ctrl_bar.addWidget(self.lbl_fps_badge)
         left_layout.addLayout(ctrl_bar)
 
+        # Nút to nổi bật BẬT/TẮT gửi lệnh UART STM32 (giống hệt start_nhamang.sh / main_window.py)
+        uart_quick_row = QHBoxLayout()
+        self.btn_quick_uart = QPushButton("📡 BẬT GỬI LỆNH UART (STM32)")
+        self.btn_quick_uart.setCheckable(True)
+        self.btn_quick_uart.setChecked(self.uart.is_enabled)
+        self.btn_quick_uart.setToolTip("Bấm để BẬT hoặc TẮT truyền tín hiệu điều khiển 5 byte (mỗi 0.1s) xuống STM32")
+        self.btn_quick_uart.clicked.connect(self._toggle_quick_uart)
+        uart_quick_row.addWidget(self.btn_quick_uart)
+        left_layout.addLayout(uart_quick_row)
+
         splitter.addWidget(left_widget)
 
         # ==========================================
@@ -378,7 +400,7 @@ class CombinedRobotApp(QMainWindow):
         uart_row = QHBoxLayout()
         self.chk_uart_enable = QCheckBox("📡 Gửi UART STM32 (/dev/ttySTM32)")
         self.chk_uart_enable.setToolTip("Bật gửi gói 5 byte (Offset + Detect) mỗi 0.1s xuống vi điều khiển STM32")
-        self.chk_uart_enable.toggled.connect(self._toggle_uart)
+        self.chk_uart_enable.toggled.connect(self._on_chk_uart_toggled)
         self.lbl_uart_info = QLabel("UART: Tắt")
         self.lbl_uart_info.setStyleSheet("color: #565f89; font-size: 11px;")
         uart_row.addWidget(self.chk_uart_enable)
@@ -399,7 +421,7 @@ class CombinedRobotApp(QMainWindow):
             "yolo_fastestv2_int8.param (YOLO-Fastest V2 INT8)",
             "picodet_int8.param (PicoDet INT8)",
             "model_int8.param (MobileNetV3-UNet INT8)",
-            "nhamang_batden_seg.pt (Bạt đen nhà màng - PyTorch)",
+            "nhamang_batden_seg.pt (Bạt đen nhà màng)",
             "farm_path_bootstrap.pt",
             "thamden_seg.pt"
         ])
@@ -453,7 +475,7 @@ class CombinedRobotApp(QMainWindow):
         grp_fusion = QGroupBox("🎯 Tự Động Bám Tâm QR (QR-Center Alignment)")
         grp_fusion_layout = QVBoxLayout(grp_fusion)
 
-        self.chk_auto_qr_nav = QCheckBox("BẬT chuyển bám Tâm QR khi đường bao > 60×60 px")
+        self.chk_auto_qr_nav = QCheckBox("BẬT chuyển bám Tâm QR khi đường bao > 100×100 px")
         self.chk_auto_qr_nav.setChecked(True)
         self.chk_auto_qr_nav.setStyleSheet("color: #bb9af7; font-weight: bold;")
         self.chk_auto_qr_nav.toggled.connect(self._reprocess_current_frame)
@@ -463,7 +485,7 @@ class CombinedRobotApp(QMainWindow):
         thresh_row.addWidget(QLabel("Ngưỡng bám tâm QR:"))
         self.spin_qr_nav_thresh = QSpinBox()
         self.spin_qr_nav_thresh.setRange(20, 500)
-        self.spin_qr_nav_thresh.setValue(60)
+        self.spin_qr_nav_thresh.setValue(100)
         self.spin_qr_nav_thresh.setSuffix(" px")
         self.spin_qr_nav_thresh.valueChanged.connect(self._reprocess_current_frame)
         thresh_row.addWidget(self.spin_qr_nav_thresh)
@@ -471,7 +493,7 @@ class CombinedRobotApp(QMainWindow):
         grp_fusion_layout.addLayout(thresh_row)
 
         stop_row = QHBoxLayout()
-        stop_row.addWidget(QLabel("Ngưỡng trạm dừng (Byte 4 = 1):"))
+        stop_row.addWidget(QLabel("Ngưỡng trạm dừng (QR > 200 px):"))
         self.spin_qr_stop_thresh = QSpinBox()
         self.spin_qr_stop_thresh.setRange(50, 1000)
         self.spin_qr_stop_thresh.setValue(200)
@@ -481,11 +503,68 @@ class CombinedRobotApp(QMainWindow):
         stop_row.addStretch()
         grp_fusion_layout.addLayout(stop_row)
 
-        self.lbl_fusion_status = QLabel("Nguồn tính sai số: 🌿 Tâm lối đi (Chờ QR > 60x60, Dừng > 200x200)")
+        self.lbl_fusion_status = QLabel("Nguồn tính sai số: 🌿 Tâm lối đi (Chờ QR > 100x100, Dừng > 200x200)")
         self.lbl_fusion_status.setStyleSheet("color: #7dcfff; font-size: 12px; font-weight: bold;")
         grp_fusion_layout.addWidget(self.lbl_fusion_status)
 
         tab_line_layout.addWidget(grp_fusion)
+
+        # Group 1.3: Nhiệm vụ tự động chuyển hướng QR (Turn 1 -> Turn 2)
+        grp_mission = QGroupBox("🚀 Nhiệm Vụ Tự Động: TURN 1 -> Rẽ Trái -> Dừng TURN 2")
+        grp_mission_layout = QVBoxLayout(grp_mission)
+
+        self.chk_mission_enabled = QCheckBox("BẬT Chu Trình: Dừng Turn 1 (1s) -> Rẽ Trái -> Dừng Tâm Turn 2")
+        self.chk_mission_enabled.setChecked(True)
+        self.chk_mission_enabled.setStyleSheet("color: #7aa2f7; font-weight: bold;")
+        grp_mission_layout.addWidget(self.chk_mission_enabled)
+
+        self.lbl_mission_status = QLabel("Nhiệm vụ QR: Sẵn sàng (Chờ tiếp cận mã TURN_1)")
+        self.lbl_mission_status.setStyleSheet("color: #7dcfff; font-size: 12px; font-weight: bold;")
+        grp_mission_layout.addWidget(self.lbl_mission_status)
+
+        # Cấu hình tự động Reset sau khi xong (Cách 1)
+        row_auto_reset = QHBoxLayout()
+        lbl_auto_reset = QLabel("⏱️ Tự động Reset sau khi xong:")
+        lbl_auto_reset.setStyleSheet("color: #a9b1d6; font-size: 11px;")
+        self.spin_auto_reset = QDoubleSpinBox()
+        self.spin_auto_reset.setRange(0.0, 30.0)
+        self.spin_auto_reset.setValue(3.0)
+        self.spin_auto_reset.setSingleStep(0.5)
+        self.spin_auto_reset.setSuffix(" s (0 = Tắt)")
+        self.spin_auto_reset.setStyleSheet("""
+            QDoubleSpinBox {
+                background-color: #1a1b26;
+                color: #7aa2f7;
+                border: 1px solid #3d59a1;
+                border-radius: 4px;
+                padding: 2px 6px;
+                font-weight: bold;
+            }
+        """)
+        self.spin_auto_reset.valueChanged.connect(self._on_auto_reset_changed)
+        row_auto_reset.addWidget(lbl_auto_reset)
+        row_auto_reset.addWidget(self.spin_auto_reset)
+        grp_mission_layout.addLayout(row_auto_reset)
+
+        self.btn_reset_mission = QPushButton("🔄 Reset Thủ Công (Dự phòng)")
+        self.btn_reset_mission.setStyleSheet("""
+            QPushButton {
+                background-color: #24283b;
+                color: #7aa2f7;
+                border: 1px solid #3d59a1;
+                border-radius: 6px;
+                padding: 6px 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #3d59a1;
+                color: #ffffff;
+            }
+        """)
+        self.btn_reset_mission.clicked.connect(self._reset_qr_mission)
+        grp_mission_layout.addWidget(self.btn_reset_mission)
+
+        tab_line_layout.addWidget(grp_mission)
         tab_line_layout.addStretch()
         self.tab_widget.addTab(tab_line, "🌿 Dò Đường (Line)")
 
@@ -659,20 +738,25 @@ class CombinedRobotApp(QMainWindow):
         self.timer.stop()
         self.is_playing = False
 
-        available_cams = []
+        orbbec_idx = find_orbbec_camera_index(default=2)
+        candidate_cams = [orbbec_idx]
         for idx in range(10):
-            test_path = f"/dev/video{idx}"
-            if os.path.exists(test_path):
-                available_cams.append(idx)
+            if idx not in candidate_cams and os.path.exists(f"/dev/video{idx}"):
+                candidate_cams.append(idx)
 
-        # Quét lần lượt các cổng camera khả dụng và kiểm tra đọc frame thực tế
+        # Quét lần lượt các cổng camera khả dụng (ưu tiên Orbbec Astra Pro) và kiểm tra đọc frame thực tế
         working_cap = None
         working_idx = None
-        for idx in available_cams:
+        for idx in candidate_cams:
             for api in [cv2.CAP_V4L2, cv2.CAP_ANY]:
                 try:
                     test_cap = cv2.VideoCapture(idx, api)
                     if test_cap.isOpened():
+                        # Cấu hình định dạng HD nếu là Orbbec
+                        test_cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                        test_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                        test_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                        test_cap.set(cv2.CAP_PROP_FPS, 30)
                         ret, test_frame = test_cap.read()
                         if ret and test_frame is not None:
                             working_cap = test_cap
@@ -793,6 +877,10 @@ class CombinedRobotApp(QMainWindow):
         self.current_frame_idx = 0
         self._read_and_process_frame()
 
+        # Tự động phát video ngay khi nạp để truyền tín hiệu UART liên tục
+        if not self.is_camera and not self.is_playing:
+            self._toggle_play_pause()
+
     def _toggle_play_pause(self):
         if not self.cap or not self.cap.isOpened():
             return
@@ -840,7 +928,7 @@ class CombinedRobotApp(QMainWindow):
         path_res = None
 
         if self.yolo.is_loaded:
-            target_sz = self.yolo.fixed_imgsz or (320 if "pico" in (self.yolo.model_path or "").lower() else 416)
+            target_sz = getattr(self.yolo, "fixed_imgsz", None) or 416
             yolo_res = self.yolo.predict(frame, conf=line_conf, imgsz=target_sz)
             if yolo_res.is_valid and yolo_res.chosen_mask is not None:
                 path_res = self.path_detector.process(frame, yolo_res.chosen_mask, is_source_valid=True)
@@ -890,8 +978,8 @@ class CombinedRobotApp(QMainWindow):
                 if path_res.extrapolated_points:
                     draw_dashed_polyline(vis_frame, path_res.extrapolated_points, color=(0, 255, 255), thickness=2)
 
-        # 3.2 HỢP NHẤT DẪN HƯỚNG: TÍNH SAI SỐ THEO TÂM QR NẾU DIỆN TÍCH ĐƯỜNG BAO > 60x60
-        min_thresh = float(self.spin_qr_nav_thresh.value()) if hasattr(self, "spin_qr_nav_thresh") else 60.0
+        # 3.2 HỢP NHẤT DẪN HƯỚNG: TÍNH SAI SỐ THEO TÂM QR NẾU DIỆN TÍCH ĐƯỜNG BAO > 100x100
+        min_thresh = float(self.spin_qr_nav_thresh.value()) if hasattr(self, "spin_qr_nav_thresh") else 100.0
         stop_thresh = float(self.spin_qr_stop_thresh.value()) if hasattr(self, "spin_qr_stop_thresh") else 200.0
         override_enabled = self.chk_auto_qr_nav.isChecked() if hasattr(self, "chk_auto_qr_nav") else True
         fused_nav = fuse_navigation_target(
@@ -903,6 +991,31 @@ class CombinedRobotApp(QMainWindow):
             enable_qr_override=override_enabled
         )
 
+        # 3.2.1 XỬ LÝ MÁY TRẠNG THÁI NHIỆM VỤ QR TURN 1 -> TURN 2
+        if hasattr(self, "qr_mission"):
+            # ĐỌC PHẢN HỒI TELEMETRY TỪ STM32 QUA UART ($RC,Auto_Forward,stm_qr_state)
+            uart_inst = getattr(self, "uart", None) or getattr(self, "uart_ctrl", None)
+            if uart_inst and uart_inst.is_enabled:
+                telemetry = uart_inst.read_telemetry()
+                if telemetry:
+                    # NẾU CÔNG TẮC KÊNH 5 BỊ GẠT XUỐNG LÁI TAY (Auto_Forward == 0):
+                    if telemetry.get("auto_forward") == 0:
+                        if self.qr_mission.state != QRTurnMissionState.IDLE:
+                            self.qr_mission.reset()
+                            self.lbl_mission_status.setText("Nhiệm vụ QR: Sẵn sàng (Đã reset từ công tắc tay cầm Kênh 5)")
+                            self.lbl_mission_status.setStyleSheet("color: #7dcfff; font-size: 12px; font-weight: bold;")
+                            self.statusBar().showMessage("🔄 Đã reset nhiệm vụ từ công tắc tay cầm Kênh 5 (Auto_Forward OFF)", 3000)
+
+            self.qr_mission.is_enabled = self.chk_mission_enabled.isChecked() if hasattr(self, "chk_mission_enabled") else True
+            if hasattr(self, "spin_qr_stop_thresh"):
+                self.qr_mission.min_stop_qr_dim = float(self.spin_qr_stop_thresh.value())
+            fused_nav = self.qr_mission.process(
+                base_nav=fused_nav,
+                qr_results=qr_results,
+                frame_shape=frame.shape,
+                path_res=path_res
+            )
+
         current_offset_val = fused_nav.lateral_offset_px
         cam_cx = fw // 2
 
@@ -910,15 +1023,14 @@ class CombinedRobotApp(QMainWindow):
         if fused_nav.target_pt:
             tx, ty = fused_nav.target_pt
             if fused_nav.is_qr_mode:
-                # Chế độ dẫn hướng theo tâm QR (> 60x60)
-                # Vẽ điểm mục tiêu tâm QR nổi bật màu tím neon + vòng ngoài vàng
+                # Chế độ dẫn hướng theo tâm QR (> 100x100 hoặc nhiệm vụ QR)
                 cv2.circle(vis_frame, (tx, ty), 10, (255, 0, 255), -1)
                 cv2.circle(vis_frame, (tx, ty), 18, (0, 255, 255), 2)
 
                 if self.chk_show_offset.isChecked():
                     cv2.line(vis_frame, (cam_cx, ty), (tx, ty), (255, 0, 255), 3, cv2.LINE_AA)
                     cv2.circle(vis_frame, (cam_cx, ty), 5, (255, 255, 255), -1)
-                    badge_str = f"🎯 [TÂM QR > {int(min_thresh)}px] {fused_nav.offset_direction}"
+                    badge_str = f"🎯 [{fused_nav.mode_name}] {fused_nav.offset_direction}"
                     cv2.putText(vis_frame, badge_str, (max(10, cam_cx - 160), max(25, ty - 12)),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 0, 255), 2, cv2.LINE_AA)
             else:
@@ -933,33 +1045,87 @@ class CombinedRobotApp(QMainWindow):
                     cv2.putText(vis_frame, offset_txt, (cam_cx - 50, ty - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 2)
 
+        # Cập nhật Trạng thái Nhiệm Vụ QR (Turn 1 -> Turn 2)
+        if hasattr(self, "lbl_mission_status") and fused_nav.mission_status_desc:
+            self.lbl_mission_status.setText(f"Nhiệm vụ: {fused_nav.mission_status_desc}")
+            if fused_nav.mission_state == QRTurnMissionState.STOP_AT_TURN1.value:
+                self.lbl_mission_status.setStyleSheet("color: #ff9e64; font-weight: bold; font-size: 13px;")
+            elif fused_nav.mission_state == QRTurnMissionState.TURNING_LEFT_SEEK_TURN2.value:
+                self.lbl_mission_status.setStyleSheet("color: #bb9af7; font-weight: bold; font-size: 13px;")
+            elif fused_nav.mission_state == QRTurnMissionState.APPROACHING_TURN2.value:
+                self.lbl_mission_status.setStyleSheet("color: #7dcfff; font-weight: bold; font-size: 13px;")
+            elif fused_nav.mission_state == QRTurnMissionState.COMPLETED_STOPPED.value:
+                self.lbl_mission_status.setStyleSheet("color: #00E676; font-weight: bold; font-size: 13px;")
+            else:
+                self.lbl_mission_status.setStyleSheet("color: #7aa2f7; font-size: 12px;")
+
         # Cập nhật Telemetry trên giao diện
         if fused_nav.is_qr_mode:
-            self.lbl_active_nav_source.setText("Mục tiêu hiện tại: 🎯 TÂM MÃ QR (Đường bao > 60×60)")
+            self.lbl_active_nav_source.setText(f"Mục tiêu hiện tại: 🎯 TÂM MÃ QR ({fused_nav.mode_name})")
             self.lbl_active_nav_source.setStyleSheet("color: #bb9af7; font-size: 13px; font-weight: bold;")
             
-            if fused_nav.qr_stop_triggered:
-                self.lbl_fusion_status.setText(f"🛑 TRẠM DỪNG QR > 200×200 [BYTE 4 = 1] ({fused_nav.qr_bbox_dim[0]:.0f}×{fused_nav.qr_bbox_dim[1]:.0f} px, S={fused_nav.qr_effective_area:,.0f}px²)")
-                self.lbl_fusion_status.setStyleSheet("color: #ff5555; font-size: 12px; font-weight: bold;")
+            if fused_nav.mission_state == QRTurnMissionState.COMPLETED_STOPPED.value:
+                self.lbl_fusion_status.setText(f"🛑 HOÀN TẤT ĐẾN TRẠM TURN_2 [BYTE 4 = 1] ({fused_nav.offset_direction})")
+                self.lbl_fusion_status.setStyleSheet("color: #00E676; font-size: 12px; font-weight: bold;")
+            elif fused_nav.mission_state == QRTurnMissionState.APPROACHING_TURN2.value:
+                if fused_nav.uart_flag_byte == 2:
+                    self.lbl_fusion_status.setText(f"⏸️ TẠM DỪNG 500MS TRIỆT TIÊU QUÁN TÍNH [BYTE 4 = 2] ({fused_nav.offset_direction})")
+                    self.lbl_fusion_status.setStyleSheet("color: #ff9e64; font-size: 12px; font-weight: bold;")
+                else:
+                    self.lbl_fusion_status.setText(f"🚀 TIẾN THEO TÂM TURN_2 [BYTE 4 = 0]: {fused_nav.qr_bbox_dim[0]:.0f}×{fused_nav.qr_bbox_dim[1]:.0f} px")
+                    self.lbl_fusion_status.setStyleSheet("color: #7dcfff; font-size: 12px; font-weight: bold;")
+            elif fused_nav.qr_stop_triggered:
+                if fused_nav.uart_flag_byte == 2:
+                    self.lbl_fusion_status.setText(f"🎉 ĐÃ BẮT TÂM TURN_2 [BYTE 4 = 2] ({fused_nav.offset_direction})")
+                    self.lbl_fusion_status.setStyleSheet("color: #00E676; font-size: 12px; font-weight: bold;")
+                elif fused_nav.uart_flag_byte == 1:
+                    self.lbl_fusion_status.setText(f"🛑 TRẠM DỪNG TURN_1 [BYTE 4 = 1] ({fused_nav.offset_direction})")
+                    self.lbl_fusion_status.setStyleSheet("color: #ff5555; font-size: 12px; font-weight: bold;")
+                else:
+                    self.lbl_fusion_status.setText(f"🛑 TRẠM DỪNG QR [BYTE 4 = 1] ({fused_nav.offset_direction})")
+                    self.lbl_fusion_status.setStyleSheet("color: #ff5555; font-size: 12px; font-weight: bold;")
+            elif fused_nav.uart_flag_byte == 2:
+                self.lbl_fusion_status.setText("🎉 ĐÃ BẮT TÂM TURN_2 [BYTE 4 = 2] (Dừng xe)")
+                self.lbl_fusion_status.setStyleSheet("color: #00E676; font-size: 12px; font-weight: bold;")
             else:
-                self.lbl_fusion_status.setText(f"🎯 Đang bám Tâm QR [BYTE 4 = 0]: {fused_nav.qr_bbox_dim[0]:.0f}×{fused_nav.qr_bbox_dim[1]:.0f} px (S={fused_nav.qr_effective_area:,.0f}px²)")
+                self.lbl_fusion_status.setText(f"🎯 Đang bám Tâm QR [BYTE 4 = 0]: {fused_nav.qr_bbox_dim[0]:.0f}×{fused_nav.qr_bbox_dim[1]:.0f} px")
                 self.lbl_fusion_status.setStyleSheet("color: #bb9af7; font-size: 12px; font-weight: bold;")
 
-            self.lbl_line_state.setText(f"Trạng thái: 🎯 BÁM TÂM QR ({fused_nav.qr_bbox_dim[0]:.0f}×{fused_nav.qr_bbox_dim[1]:.0f} > {int(min_thresh)}px)")
+            self.lbl_line_state.setText(f"Trạng thái: 🎯 {fused_nav.mode_name}")
             self.lbl_line_state.setStyleSheet("color: #bb9af7; font-weight: bold; font-size: 15px;")
             self.lbl_line_offset.setText(f"Độ lệch tâm: {fused_nav.offset_direction}")
 
-            # Tính toán hướng lái đề xuất căn theo tâm QR
-            deg = abs(fused_nav.lateral_offset_px) / (fw * 0.5) * 15.0
-            if fused_nav.lateral_offset_px < -5:
-                self.lbl_steering_action.setText(f"Lệnh lái: BẺ LÁI PHẢI (+{deg:.1f}°) [Căn tâm QR]")
-                self.lbl_steering_action.setStyleSheet("color: #7dcfff; font-weight: bold; font-size: 13px;")
-            elif fused_nav.lateral_offset_px > 5:
-                self.lbl_steering_action.setText(f"Lệnh lái: BẺ LÁI TRÁI (-{deg:.1f}°) [Căn tâm QR]")
-                self.lbl_steering_action.setStyleSheet("color: #bb9af7; font-weight: bold; font-size: 13px;")
-            else:
-                self.lbl_steering_action.setText("Lệnh lái: GIỮ THẲNG [Đã đúng tâm QR]")
+            # Tính toán hướng lái đề xuất
+            if fused_nav.mission_state == QRTurnMissionState.COMPLETED_STOPPED.value:
+                self.lbl_steering_action.setText("🛑 LỆNH LÁI: DỪNG HOÀN TẤT (Đã đến trạm TURN_2 ≥ 200px)")
                 self.lbl_steering_action.setStyleSheet("color: #00E676; font-weight: bold; font-size: 13px;")
+            elif fused_nav.mission_state == QRTurnMissionState.APPROACHING_TURN2.value:
+                if fused_nav.uart_flag_byte == 2:
+                    self.lbl_steering_action.setText("⏸️ LỆNH LÁI: TẠM DỪNG 500MS TRIỆT TIÊU QUÁN TÍNH")
+                    self.lbl_steering_action.setStyleSheet("color: #ff9e64; font-weight: bold; font-size: 13px;")
+                else:
+                    self.lbl_steering_action.setText(f"🚀 LỆNH LÁI: TIẾN THEO TÂM TURN_2 ({fused_nav.offset_direction})")
+                    self.lbl_steering_action.setStyleSheet("color: #7dcfff; font-weight: bold; font-size: 13px;")
+            elif fused_nav.mission_state == QRTurnMissionState.STOP_AT_TURN1.value or (fused_nav.uart_flag_byte == 1 and fused_nav.mode_name == "TURN1_STATION"):
+                self.lbl_steering_action.setText("🛑 LỆNH LÁI: GỬI B4=1 ĐẾN TRẠM TURN_1 (STM32 tự dừng 1s & xoay)")
+                self.lbl_steering_action.setStyleSheet("color: #ff5555; font-weight: bold; font-size: 13px;")
+            elif fused_nav.mission_state == QRTurnMissionState.TURNING_LEFT_SEEK_TURN2.value and fused_nav.uart_flag_byte != 2:
+                self.lbl_steering_action.setText(f"↩️ LỆNH LÁI: STM32 ĐANG QUAY TRÁI TÌM TURN_2 ({fused_nav.offset_direction})")
+                self.lbl_steering_action.setStyleSheet("color: #bb9af7; font-weight: bold; font-size: 13px;")
+            elif fused_nav.qr_stop_triggered:
+                self.lbl_steering_action.setText("🛑 LỆNH LÁI: DỪNG ROBOT (Trạm dừng QR > 200 px)")
+                self.lbl_steering_action.setStyleSheet("color: #ff5555; font-weight: bold; font-size: 13px;")
+            else:
+                deg = abs(fused_nav.lateral_offset_px) / (fw * 0.5) * 15.0 if fused_nav.lateral_offset_px else 0.0
+                if fused_nav.lateral_offset_px and fused_nav.lateral_offset_px < -5:
+                    self.lbl_steering_action.setText(f"Lệnh lái: BẺ LÁI PHẢI (+{deg:.1f}°) [Căn tâm QR]")
+                    self.lbl_steering_action.setStyleSheet("color: #7dcfff; font-weight: bold; font-size: 13px;")
+                elif fused_nav.lateral_offset_px and fused_nav.lateral_offset_px > 5:
+                    self.lbl_steering_action.setText(f"Lệnh lái: BẺ LÁI TRÁI (-{deg:.1f}°) [Căn tâm QR]")
+                    self.lbl_steering_action.setStyleSheet("color: #bb9af7; font-weight: bold; font-size: 13px;")
+                else:
+                    self.lbl_steering_action.setText("Lệnh lái: GIỮ THẲNG [Đã đúng tâm QR]")
+                    self.lbl_steering_action.setStyleSheet("color: #00E676; font-weight: bold; font-size: 13px;")
 
         elif path_res is not None and path_res.state != TrackingState.LOST:
             self.lbl_active_nav_source.setText("Mục tiêu hiện tại: 🌿 Tâm lối đi (Path Center)")
@@ -967,6 +1133,8 @@ class CombinedRobotApp(QMainWindow):
             if fused_nav.qr_stop_triggered:
                 self.lbl_fusion_status.setText("🛑 TRẠM DỪNG QR > 200×200 [BYTE 4 = 1] | Lái theo lối đi")
                 self.lbl_fusion_status.setStyleSheet("color: #ff5555; font-size: 12px; font-weight: bold;")
+                self.lbl_steering_action.setText("🛑 LỆNH LÁI: DỪNG ROBOT (Trạm dừng QR > 200 px)")
+                self.lbl_steering_action.setStyleSheet("color: #ff5555; font-weight: bold; font-size: 13px;")
             else:
                 self.lbl_fusion_status.setText("Nguồn tính sai số: 🌿 Tâm lối đi [BYTE 4 = 0]")
                 self.lbl_fusion_status.setStyleSheet("color: #7dcfff; font-size: 12px;")
@@ -1004,8 +1172,8 @@ class CombinedRobotApp(QMainWindow):
 
         # Gửi dữ liệu điều khiển qua UART nếu được bật
         if hasattr(self, "uart") and self.uart and self.uart.is_enabled:
-            # Quy tắc Byte 4: 1 nếu diện tích QR > 200x200, ngược lại thì 0 (không xét có đường/mất đường)
-            is_qr_stop = bool(fused_nav.uart_flag_byte)
+            # Byte 4: Giá trị số nguyên từ fused_nav (0: Chạy, 1: Dừng, 2: Rẽ trái, 3: Căn tâm)
+            flag_val = int(fused_nav.uart_flag_byte)
             conf_val = 98.0 if fused_nav.is_qr_mode else (path_res.confidence if path_res else 0.0)
             tx = fused_nav.target_pt[0] if fused_nav.target_pt else None
             ty = fused_nav.target_pt[1] if fused_nav.target_pt else None
@@ -1017,11 +1185,12 @@ class CombinedRobotApp(QMainWindow):
                 confidence_pct=conf_val,
                 target_x=tx,
                 target_y=ty,
-                is_detected=is_qr_stop
+                is_detected=flag_val
             )
             pkt_txt = self.uart.last_sent_packet or ""
             if hasattr(self, "lbl_uart_info"):
-                flag_str = "1 (STOP TRẠM)" if fused_nav.uart_flag_byte else "0 (CHẠY)"
+                flag_str_map = {0: "0 (TIẾN)", 1: "1 (TRẠM DỪNG)", 2: "2 (TÂM DỪNG 500MS)"}
+                flag_str = flag_str_map.get(flag_val, f"{flag_val}")
                 self.lbl_uart_info.setText(f"UART [B4={flag_str}]: {pkt_txt.strip()[:24]}")
 
         # 3.4 Vẽ mã QR trực quan
@@ -1038,9 +1207,31 @@ class CombinedRobotApp(QMainWindow):
             line_stat_short = f"🌿 LINE: {path_res.state.name if path_res else 'N/A'}"
         qr_count = len([r for r in qr_results if r.is_decoded])
         qr_stat_short = f"QR: {qr_count} mã"
-        stop_badge = "🛑 TRẠM (B4=1)" if fused_nav.qr_stop_triggered else "⚪ B4=0"
+        stop_badge_map = {
+            0: "⚪ B4=0 (CHẠY)",
+            1: "🛑 B4=1 (TRẠM TURN_1)",
+            2: "🎉 B4=2 (TÂM TURN_2)",
+            3: "↪️ B4=3 (XOAY PHẢI TÌM ĐƯỜNG)"
+        }
+        stop_badge = stop_badge_map.get(fused_nav.uart_flag_byte, f"B4={fused_nav.uart_flag_byte}")
         hud_txt = f"ROBOT AGV HUD | {line_stat_short} ({fused_nav.offset_direction}) | {stop_badge} | {qr_stat_short} | FPS: {fps_current:.1f}"
         cv2.putText(vis_frame, hud_txt, (15, 27), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2, cv2.LINE_AA)
+
+        # HUD hiển thị trạng thái nhiệm vụ QR Turn 1 -> Turn 2 nếu đang hoạt động
+        if hasattr(fused_nav, "mission_state") and fused_nav.mission_state != QRTurnMissionState.IDLE.value and fused_nav.mission_status_desc:
+            overlay_h = 36
+            banner_bg = (30, 20, 60)
+            if fused_nav.mission_state == QRTurnMissionState.STOP_AT_TURN1.value:
+                banner_bg = (20, 40, 80)
+            elif fused_nav.mission_state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH.value:
+                banner_bg = (60, 40, 20)
+            elif fused_nav.mission_state == QRTurnMissionState.COMPLETED_STOPPED.value:
+                banner_bg = (20, 80, 40)
+                banner_bg = (20, 80, 40)
+            cv2.rectangle(vis_frame, (10, 48), (fw - 10, 48 + overlay_h), banner_bg, -1)
+            cv2.rectangle(vis_frame, (10, 48), (fw - 10, 48 + overlay_h), (187, 154, 247), 2)
+            cv2.putText(vis_frame, f"[NHIỆM VỤ QR] {fused_nav.mission_status_desc}", (20, 72),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.60, (0, 255, 255), 2, cv2.LINE_AA)
 
         # Hiển thị lên QLabel
         self._display_video_frame(vis_frame)
@@ -1155,7 +1346,7 @@ class CombinedRobotApp(QMainWindow):
             m_path = os.path.join(CURRENT_DIR, "models", model_names[idx])
             if os.path.exists(m_path):
                 self.yolo.load_model(m_path, device=self.device)
-                self.status_bar.showMessage(f"Đã chuyển model Line sang: {model_names[idx]} ({self.yolo.device_display_name})")
+                self.status_bar.showMessage(f"Đã chuyển model Line sang: {model_names[idx]}")
                 self._reprocess_current_frame()
 
     def _on_line_conf_changed(self, val: int):
@@ -1181,6 +1372,18 @@ class CombinedRobotApp(QMainWindow):
     def _reprocess_current_frame(self):
         if not self.is_playing and self.last_frame_bgr is not None:
             self._process_frame(self.last_frame_bgr)
+
+    def _reset_qr_mission(self):
+        if hasattr(self, "qr_mission"):
+            self.qr_mission.reset()
+        if hasattr(self, "lbl_mission_status"):
+            self.lbl_mission_status.setText("Nhiệm vụ QR: Đã reset (Chờ tiếp cận mã TURN_1)")
+            self.lbl_mission_status.setStyleSheet("color: #7dcfff; font-size: 12px; font-weight: bold;")
+        self.statusBar().showMessage("🔄 Đã reset nhiệm vụ chuyển hướng QR (Turn 1 -> Turn 2)", 3000)
+
+    def _on_auto_reset_changed(self, val: float):
+        if hasattr(self, "qr_mission"):
+            self.qr_mission.auto_reset_delay_sec = float(val)
 
     def _step_forward(self):
         if not self.cap or self.is_camera:
@@ -1279,19 +1482,74 @@ class CombinedRobotApp(QMainWindow):
         else:
             QMessageBox.information(self, "Thông báo", "Chưa có sự kiện nào được ghi nhận.")
 
-    def _toggle_uart(self, state: bool):
-        if hasattr(self, "uart") and self.uart:
-            self.uart.is_enabled = state
-            if state:
-                ok = self.uart.connect()
-                if ok:
-                    self.lbl_uart_info.setText(f"🟢 {self.uart.port}")
-                    self.lbl_uart_info.setStyleSheet("color: #00E676; font-weight: bold;")
-                else:
-                    self.lbl_uart_info.setText("🔴 Chưa cắm STM32")
-                    self.lbl_uart_info.setStyleSheet("color: #ff5555; font-weight: bold;")
+    def _toggle_quick_uart(self):
+        new_state = not getattr(self.uart, "is_enabled", False)
+        self._set_uart_enabled(new_state)
+
+    def _on_chk_uart_toggled(self, checked: bool):
+        self._set_uart_enabled(checked)
+
+    def _set_uart_enabled(self, enabled: bool):
+        if not hasattr(self, "uart") or not self.uart:
+            return
+
+        self.uart.is_enabled = enabled
+        if enabled:
+            ok = self.uart.connect()
+        else:
+            self.uart.disconnect()
+            ok = False
+
+        self._update_uart_ui_state()
+        status_msg = f"Truyền UART STM32: {'BẬT (Gửi 5 byte mỗi 0.1s)' if enabled else 'TẮT'}"
+        self.statusBar().showMessage(status_msg, 3000)
+
+    def _update_uart_ui_state(self):
+        if not hasattr(self, "uart") or not self.uart:
+            return
+
+        is_on = getattr(self.uart, "is_enabled", False)
+        is_conn = getattr(self.uart, "is_connected", False)
+
+        # 1. Đồng bộ Checkbox ở Tab Dẫn hướng bên phải
+        if hasattr(self, "chk_uart_enable"):
+            self.chk_uart_enable.blockSignals(True)
+            self.chk_uart_enable.setChecked(is_on)
+            self.chk_uart_enable.blockSignals(False)
+
+        # 2. Cập nhật nút nhấn nhanh to nổi bật ở Panel Trái (giống start_nhamang.sh)
+        if hasattr(self, "btn_quick_uart"):
+            self.btn_quick_uart.blockSignals(True)
+            self.btn_quick_uart.setChecked(is_on)
+            if is_on and is_conn:
+                self.btn_quick_uart.setText(f"🟢 ĐANG GỬI UART STM32 ({self.uart.port}) - BẤM ĐỂ TẮT")
+                self.btn_quick_uart.setStyleSheet(
+                    "background-color: #2e7d32; color: #ffffff; font-weight: bold; font-size: 13px; "
+                    "padding: 10px; border-radius: 6px; border: 2px solid #81c784;"
+                )
+            elif is_on and not is_conn:
+                self.btn_quick_uart.setText(f"🔴 LỖI KẾT NỐI UART ({self.uart.port}) - BẤM THỬ LẠI")
+                self.btn_quick_uart.setStyleSheet(
+                    "background-color: #b71c1c; color: #ffffff; font-weight: bold; font-size: 13px; "
+                    "padding: 10px; border-radius: 6px; border: 2px solid #ef5350;"
+                )
             else:
-                self.uart.disconnect()
+                self.btn_quick_uart.setText("📡 BẬT GỬI LỆNH UART (STM32)")
+                self.btn_quick_uart.setStyleSheet(
+                    "background-color: #37474f; color: #ffb74d; font-weight: bold; font-size: 13px; "
+                    "padding: 10px; border-radius: 6px; border: 1px solid #ff9800;"
+                )
+            self.btn_quick_uart.blockSignals(False)
+
+        # 3. Cập nhật Label trạng thái ở Panel Phải
+        if hasattr(self, "lbl_uart_info"):
+            if is_on and is_conn:
+                self.lbl_uart_info.setText(f"🟢 {self.uart.port} (115200)")
+                self.lbl_uart_info.setStyleSheet("color: #00E676; font-weight: bold;")
+            elif is_on and not is_conn:
+                self.lbl_uart_info.setText(f"🔴 Lỗi: {self.uart.port}")
+                self.lbl_uart_info.setStyleSheet("color: #ff5555; font-weight: bold;")
+            else:
                 self.lbl_uart_info.setText("UART: Tắt")
                 self.lbl_uart_info.setStyleSheet("color: #565f89;")
 
@@ -1311,10 +1569,14 @@ def main():
     app.setApplicationName("Robot Line + QR Navigation")
 
     initial_vid = None
-    if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
-        initial_vid = sys.argv[1]
+    initial_uart = False
+    for arg in sys.argv[1:]:
+        if arg == "--uart":
+            initial_uart = True
+        elif not arg.startswith("-") and initial_vid is None:
+            initial_vid = arg
 
-    gui = CombinedRobotApp(initial_video=initial_vid)
+    gui = CombinedRobotApp(initial_video=initial_vid, initial_uart=initial_uart)
     gui.show()
     sys.exit(app.exec_())
 
