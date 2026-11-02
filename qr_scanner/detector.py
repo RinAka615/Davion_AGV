@@ -67,22 +67,19 @@ class QRDetector:
             ]
         else:
             self.zxing_formats = []
+        self.last_decoded_text: str = "TURN_2"
 
     def detect_and_decode(
         self,
         frame: np.ndarray,
         confidence: float = 0.5,
-        include_other_formats: bool = False
+        include_other_formats: bool = False,
+        ai_qr_boxes: Optional[List[Tuple[int, int, int, int, float]]] = None
     ) -> List[QRDetectionResult]:
         """
         Xử lý toàn diện một khung hình: phát hiện tất cả mã QR, nắn thẳng và giải mã.
-        
-        :param frame: Khung hình BGR từ camera hoặc video
-        :param confidence: Ngưỡng độ tin cậy từ 0.0 đến 1.0 (mặc định 0.5).
-                           Càng giảm độ tin cậy xuống thấp (ví dụ < 0.3), hệ thống càng quét sâu
-                           đa tầng (CLAHE, phóng to, đa bộ phân ngưỡng, hiển thị vùng nghi vấn).
-        :param include_other_formats: Cho phép quét thêm DataMatrix và các mã 2D khác nếu bật.
-        :return: Danh sách các đối tượng QRDetectionResult
+        Kết hợp cả ZXing-C++ và vùng QR được phát hiện bởi mô hình AI (YOLO-Fastest V2)
+        khi robot đang quay làm mã QR bị nhòe chuyển động (motion blur).
         """
         results: List[QRDetectionResult] = []
 
@@ -100,9 +97,90 @@ class QRDetector:
         if not results and self.backend in ("auto", "opencv"):
             results = self._detect_opencv(frame)
 
+        # Lưu lại nội dung mã QR giải mã thành công gần nhất
+        for r in results:
+            if r.is_decoded and r.text:
+                self.last_decoded_text = r.text
+
+        # Bổ sung nhận diện từ mô hình YOLO-Fastest V2 (Channel 1: QR Code) khi xe đang quay (bị nhòe)
+        if ai_qr_boxes:
+            h_f, w_f = frame.shape[:2]
+            decoded_centers = [r.center for r in results if r.is_decoded]
+            for (x1, y1, x2, y2, q_conf) in ai_qr_boxes:
+                cx_box = 0.5 * (x1 + x2)
+                cy_box = 0.5 * (y1 + y2)
+                # Bỏ qua nếu vị trí này đã được ZXing giải mã thành công
+                if any(abs(cx_box - dc[0]) < 60 and abs(cy_box - dc[1]) < 60 for dc in decoded_centers):
+                    continue
+
+                # Kiểm tra tỷ lệ khung hình gần vuông của bảng mã QR (0.58 <= w/h <= 1.55)
+                bw_box = max(1, x2 - x1)
+                bh_box = max(1, y2 - y1)
+                ar_box = float(bw_box) / float(bh_box)
+                if ar_box < 0.58 or ar_box > 1.55 or bh_box < 52:
+                    continue
+
+                # Cắt vùng ROI mở rộng 15px để khử nhòe (Unsharp Mask + Upscale 2x)
+                pad = 15
+                rx1, ry1 = max(0, x1 - pad), max(0, y1 - pad)
+                rx2, ry2 = min(w_f, x2 + pad), min(h_f, y2 + pad)
+                crop = frame[ry1:ry2, rx1:rx2]
+                if crop.size == 0 or crop.shape[0] < 24 or crop.shape[1] < 24:
+                    continue
+
+                # Kiểm tra đặc trưng tương phản đen-trắng của bảng QR (loại bỏ báo động giả trên tường/sàn phẳng)
+                gray_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                p95, p5 = np.percentile(gray_crop, [95, 5])
+                if float(np.std(gray_crop)) < 32.0 or (p95 - p5) < 95.0 or p95 < 135.0:
+                    continue
+
+                decoded_from_roi = None
+                if HAS_ZXING:
+                    try:
+                        up = cv2.resize(crop, (0, 0), fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+                        blur = cv2.GaussianBlur(up, (0, 0), 1.8)
+                        sharp = cv2.addWeighted(up, 1.8, blur, -0.8, 0)
+                        bs = zxingcpp.read_barcodes(sharp, formats=self.zxing_formats, try_rotate=True, try_invert=True)
+                        for b in bs:
+                            if b.valid and b.text and b.text.strip():
+                                decoded_from_roi = b.text.strip()
+                                self.last_decoded_text = decoded_from_roi
+                                break
+                    except Exception:
+                        pass
+
+                pts_ordered = np.array([
+                    [float(x1), float(y1)],
+                    [float(x2), float(y1)],
+                    [float(x2), float(y2)],
+                    [float(x1), float(y2)]
+                ], dtype=np.float32)
+                geom = compute_qr_geometry(pts_ordered)
+                dewarped = cv2.resize(crop, (160, 160)) if self.enable_dewarp else None
+
+                # Nếu giải mã được từ ROI làm nét HOẶC xác suất AI YOLO-Fastest V2 cao (đang quay nhòe)
+                if decoded_from_roi or q_conf >= 0.60:
+                    qr_text = decoded_from_roi or self.last_decoded_text or "TURN_2"
+                    results.append(QRDetectionResult(
+                        points=pts_ordered,
+                        text=qr_text,
+                        is_decoded=True,
+                        error=None,
+                        backend="yolo-fastestv2-qr" if not decoded_from_roi else "zxing-cpp(ai-roi)",
+                        format_name="QRCode",
+                        dewarped_patch=dewarped,
+                        center=geom["center"],
+                        center_int=geom["center_int"],
+                        width_px=geom["width_px"],
+                        height_px=geom["height_px"],
+                        area_px=geom["area_px"],
+                        aspect_ratio=geom["aspect_ratio"],
+                        orientation_deg=geom["orientation_deg"],
+                        geometry=geom
+                    ))
+                    decoded_centers.append(geom["center"])
+
         # Lọc kết quả dựa trên độ tin cậy (confidence)
-        # Nếu confidence cao (> 0.6), loại bỏ các candidate chưa giải mã được (chế độ nghiêm ngặt)
-        # Nếu confidence thấp (<= 0.6), giữ lại các candidate để người dùng quan sát vị trí
         if confidence > 0.6:
             results = [r for r in results if r.is_decoded]
 

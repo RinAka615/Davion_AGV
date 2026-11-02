@@ -42,6 +42,7 @@ class YoloResult:
     frame_shape: Tuple[int, int] = (0, 0)  # (H, W)
     device_used: str = ""
     fallback_reason: str = ""
+    qr_boxes: List[Tuple[int, int, int, int, float]] = field(default_factory=list)
 
 
 def get_cpu_info() -> str:
@@ -388,9 +389,32 @@ class YoloSegmenter:
                 ex = self.ncnn_net.create_extractor()
                 ex.input("in0", in_mat)
                 ret, out_mat = ex.extract("out0")
-                prob_map = np.array(out_mat, dtype=np.float32)
-                if prob_map.ndim == 3:
-                    prob_map = prob_map[0]
+                prob_raw = np.array(out_mat, dtype=np.float32)
+
+                qr_boxes_out: List[Tuple[int, int, int, int, float]] = []
+                if prob_raw.ndim == 3:
+                    prob_map = prob_raw[0]
+                    if prob_raw.shape[0] >= 2:
+                        qr_prob = prob_raw[1]
+                        qr_m320 = (qr_prob >= 0.42).astype(np.uint8) * 255
+                        q_cnts, _ = cv2.findContours(qr_m320, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                        sx, sy = float(w_img) / eff_sz, float(h_img) / eff_sz
+                        for qc in q_cnts:
+                            q_area = cv2.contourArea(qc)
+                            if 80 <= q_area <= 18000:
+                                qx, qy, qw, qh = cv2.boundingRect(qc)
+                                ar = float(qw) / max(1.0, float(qh))
+                                if 0.45 <= ar <= 2.2:
+                                    q_conf = float(np.mean(qr_prob[qy : qy + qh, qx : qx + qw]))
+                                    x1 = max(0, int(qx * sx))
+                                    y1 = max(0, int(qy * sy))
+                                    x2 = min(w_img, int((qx + qw) * sx))
+                                    y2 = min(h_img, int((qy + qh) * sy))
+                                    if (x2 - x1) >= 28 and (y2 - y1) >= 28:
+                                        qr_boxes_out.append((x1, y1, x2, y2, q_conf))
+                else:
+                    prob_map = prob_raw
+                self.last_ai_qr_boxes = qr_boxes_out
 
                 thresh = max(float(effective_conf or 0.62), 0.62)
                 mask_320 = (prob_map >= thresh).astype(np.uint8) * 255
@@ -407,7 +431,7 @@ class YoloSegmenter:
                 if contours:
                     largest_cnt = max(contours, key=cv2.contourArea)
                     area = int(cv2.contourArea(largest_cnt))
-                    if area > 300:
+                    if area > 1600:
                         x, y, w, h = cv2.boundingRect(largest_cnt)
                         M = cv2.moments(largest_cnt)
                         cx = int(M["m10"] / M["m00"]) if M["m00"] > 0 else (x + w // 2)
@@ -439,10 +463,11 @@ class YoloSegmenter:
                     chosen_confidence=chosen_instance.confidence if chosen_instance else None,
                     inference_time_ms=inference_time_ms,
                     model_name=os.path.basename(self.model_path or "model_int8"),
-                    class_names={0: "bat_loi_di"},
+                    class_names={0: "bat_loi_di", 1: "qr_code"},
                     frame_shape=(h_img, w_img),
                     device_used=self.device_display_name,
-                    fallback_reason=""
+                    fallback_reason="",
+                    qr_boxes=qr_boxes_out
                 )
             except Exception as e_inf:
                 return YoloResult(

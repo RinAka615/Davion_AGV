@@ -1044,8 +1044,9 @@ class CombinedRobotApp(QMainWindow):
         qr_conf = self.slider_qr_conf.value() / 100.0
         self.qr_detector.enable_dewarp = self.chk_qr_dewarp.isChecked()
 
-        # Quét liên tục mỗi frame (bỏ giới hạn tần số để nhận diện tức thì và nhạy nhất)
-        qr_results = self.qr_detector.detect_and_decode(frame, confidence=qr_conf)
+        # Quét liên tục mỗi frame + kết hợp vùng QR do AI (YOLO-Fastest V2) phát hiện khi đang quay nhòe
+        ai_qr_boxes = getattr(yolo_res, "qr_boxes", None) if yolo_res is not None else None
+        qr_results = self.qr_detector.detect_and_decode(frame, confidence=qr_conf, ai_qr_boxes=ai_qr_boxes)
         if not self.chk_qr_candidates.isChecked():
             qr_results = [r for r in qr_results if r.is_decoded]
 
