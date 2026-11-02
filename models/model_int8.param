@@ -1,0 +1,84 @@
+7767517
+82 91
+Input                    in0                      0 1 in0
+Convolution              conv_5                   1 1 in0 1 0=16 1=3 3=2 4=1 5=1 6=432 8=2
+HardSwish                hswish_32                1 1 1 2 0=1.666667e-01
+ConvolutionDepthWise     convdwrelu_0             1 1 2 3 0=16 1=3 3=2 4=1 5=1 6=144 7=16 8=101 9=1
+Convolution              conv_6                   1 1 3 4 0=16 1=1 5=1 6=256 8=2
+Split                    splitncnn_0              1 2 4 5 6
+Convolution              convrelu_0               1 1 6 7 0=72 1=1 5=1 6=1152 8=102 9=1
+ConvolutionDepthWise     convdwrelu_1             1 1 7 8 0=72 1=3 3=2 4=1 5=1 6=648 7=72 8=101 9=1
+Convolution              conv_8                   1 1 8 9 0=24 1=1 5=1 6=1728 8=2
+Split                    splitncnn_1              1 2 9 10 11
+Convolution              convrelu_1               1 1 11 12 0=88 1=1 5=1 6=2112 8=102 9=1
+ConvolutionDepthWise     convdwrelu_2             1 1 12 13 0=88 1=3 4=1 5=1 6=792 7=88 8=101 9=1
+Convolution              conv_10                  1 1 13 14 0=24 1=1 5=1 6=2112 8=2
+BinaryOp                 add_0                    2 1 14 10 15
+Split                    splitncnn_2              1 2 15 16 17
+Convolution              conv_11                  1 1 17 18 0=96 1=1 5=1 6=2304 8=2
+HardSwish                hswish_33                1 1 18 19 0=1.666667e-01
+ConvolutionDepthWise     convdw_64                1 1 19 20 0=96 1=5 3=2 4=2 5=1 6=2400 7=96 8=1
+HardSwish                hswish_34                1 1 20 21 0=1.666667e-01
+Convolution              conv_12                  1 1 21 22 0=40 1=1 5=1 6=3840 8=2
+Split                    splitncnn_3              1 2 22 23 24
+Convolution              conv_13                  1 1 24 25 0=240 1=1 5=1 6=9600 8=2
+HardSwish                hswish_35                1 1 25 26 0=1.666667e-01
+ConvolutionDepthWise     convdw_65                1 1 26 27 0=240 1=5 4=2 5=1 6=6000 7=240 8=1
+HardSwish                hswish_36                1 1 27 28 0=1.666667e-01
+Convolution              conv_14                  1 1 28 29 0=40 1=1 5=1 6=9600 8=2
+BinaryOp                 add_1                    2 1 29 23 30
+Split                    splitncnn_4              1 2 30 31 32
+Convolution              conv_15                  1 1 32 33 0=240 1=1 5=1 6=9600 8=2
+HardSwish                hswish_37                1 1 33 34 0=1.666667e-01
+ConvolutionDepthWise     convdw_66                1 1 34 35 0=240 1=5 4=2 5=1 6=6000 7=240 8=1
+HardSwish                hswish_38                1 1 35 36 0=1.666667e-01
+Convolution              conv_16                  1 1 36 37 0=40 1=1 5=1 6=9600 8=2
+BinaryOp                 add_2                    2 1 37 31 38
+Convolution              conv_17                  1 1 38 39 0=120 1=1 5=1 6=4800 8=2
+HardSwish                hswish_39                1 1 39 40 0=1.666667e-01
+ConvolutionDepthWise     convdw_67                1 1 40 41 0=120 1=5 4=2 5=1 6=3000 7=120 8=1
+HardSwish                hswish_40                1 1 41 42 0=1.666667e-01
+Convolution              conv_18                  1 1 42 43 0=48 1=1 5=1 6=5760 8=2
+Split                    splitncnn_5              1 2 43 44 45
+Convolution              conv_19                  1 1 45 46 0=144 1=1 5=1 6=6912 8=2
+HardSwish                hswish_41                1 1 46 47 0=1.666667e-01
+ConvolutionDepthWise     convdw_68                1 1 47 48 0=144 1=5 4=2 5=1 6=3600 7=144 8=1
+HardSwish                hswish_42                1 1 48 49 0=1.666667e-01
+Convolution              conv_20                  1 1 49 50 0=48 1=1 5=1 6=6912 8=2
+BinaryOp                 add_3                    2 1 50 44 51
+Split                    splitncnn_6              1 2 51 52 53
+Convolution              conv_21                  1 1 53 54 0=288 1=1 5=1 6=13824 8=2
+HardSwish                hswish_43                1 1 54 55 0=1.666667e-01
+ConvolutionDepthWise     convdw_69                1 1 55 56 0=288 1=5 3=2 4=2 5=1 6=7200 7=288 8=1
+HardSwish                hswish_44                1 1 56 57 0=1.666667e-01
+Convolution              conv_22                  1 1 57 58 0=96 1=1 5=1 6=27648 8=2
+Split                    splitncnn_7              1 2 58 59 60
+Convolution              conv_23                  1 1 60 61 0=576 1=1 5=1 6=55296 8=2
+HardSwish                hswish_45                1 1 61 62 0=1.666667e-01
+ConvolutionDepthWise     convdw_70                1 1 62 63 0=576 1=5 4=2 5=1 6=14400 7=576 8=1
+HardSwish                hswish_46                1 1 63 64 0=1.666667e-01
+Convolution              conv_24                  1 1 64 65 0=96 1=1 5=1 6=55296 8=2
+BinaryOp                 add_4                    2 1 65 59 66
+Split                    splitncnn_8              1 2 66 67 68
+Convolution              conv_25                  1 1 68 69 0=576 1=1 5=1 6=55296 8=2
+HardSwish                hswish_47                1 1 69 70 0=1.666667e-01
+ConvolutionDepthWise     convdw_71                1 1 70 71 0=576 1=5 4=2 5=1 6=14400 7=576 8=1
+HardSwish                hswish_48                1 1 71 72 0=1.666667e-01
+Convolution              conv_26                  1 1 72 73 0=96 1=1 5=1 6=55296 8=2
+BinaryOp                 add_5                    2 1 73 67 74
+Convolution              convrelu_2               1 1 74 75 0=48 1=1 5=1 6=4608 8=2 9=1
+Interp                   upsample_1               1 1 75 76 0=2 3=20 4=20
+BinaryOp                 add_6                    2 1 76 52 77
+ConvolutionDepthWise     convdwrelu_3             1 1 77 78 0=48 1=3 4=1 5=1 6=432 7=48 8=101 9=1
+Convolution              convrelu_3               1 1 78 79 0=24 1=1 5=1 6=1152 8=2 9=1
+Interp                   upsample_2               1 1 79 80 0=2 3=40 4=40
+BinaryOp                 add_7                    2 1 80 16 81
+ConvolutionDepthWise     convdwrelu_4             1 1 81 82 0=24 1=3 4=1 5=1 6=216 7=24 8=101 9=1
+Convolution              convrelu_4               1 1 82 83 0=16 1=1 5=1 6=384 8=2 9=1
+Interp                   upsample_3               1 1 83 84 0=2 3=80 4=80
+BinaryOp                 add_8                    2 1 84 5 85
+ConvolutionDepthWise     convdwrelu_5             1 1 85 86 0=16 1=3 4=1 5=1 6=144 7=16 8=101 9=1
+Convolution              convrelu_5               1 1 86 87 0=16 1=1 5=1 6=256 8=102 9=1
+Convolution              conv_31                  1 1 87 88 0=1 1=1 5=1 6=16 8=2
+Interp                   upsample_4               1 1 88 89 0=2 3=320 4=320
+Sigmoid                  sigmoid_0                1 1 89 out0

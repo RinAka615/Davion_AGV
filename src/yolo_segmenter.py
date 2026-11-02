@@ -125,6 +125,7 @@ class YoloSegmenter:
         self.device_display_name: str = "CPU"
         self.fallback_reason: str = ""
         self.device: str = "cpu"
+        self.is_unet_int8: bool = False
         self._resolve_device(self.requested_device)
         try:
             import torch
@@ -193,10 +194,45 @@ class YoloSegmenter:
         if model_path and (model_path.endswith(".param") or model_path.endswith(".bin") or os.path.basename(model_path) == "metadata.yaml"):
             model_path = os.path.dirname(model_path)
         self.model_path = model_path
+        self.is_unet_int8 = False
 
         if not os.path.exists(model_path):
             self.load_error = f"File/thư mục model không tồn tại: {model_path}"
             return False
+
+        # Support direct MobileNetV3-UNet INT8 NCNN models (.param / .bin)
+        if "model_int8" in model_path.lower() or model_path.endswith(".param") or (os.path.isdir(model_path) and os.path.exists(os.path.join(model_path, "model_int8.param"))):
+            try:
+                import ncnn
+                self.is_unet_int8 = True
+                self.is_ncnn = True
+                param_path = model_path if model_path.endswith(".param") else (
+                    os.path.join(model_path, "model_int8.param") if os.path.isdir(model_path) else (
+                        model_path if os.path.isfile(model_path) else model_path + ".param"
+                    )
+                )
+                bin_path = param_path.rsplit(".", 1)[0] + ".bin"
+                net = ncnn.Net()
+                net.opt.use_vulkan_compute = False
+                net.opt.num_threads = 2
+                net.opt.use_int8_inference = True
+                if net.load_param(param_path) == 0 and net.load_model(bin_path) == 0:
+                    self.ncnn_net = net
+                    self.model = net
+                    self.is_loaded = True
+                    self.fixed_imgsz = 320
+                    self.imgsz = 320
+                    self.device = "cpu"
+                    self.effective_device = "cpu"
+                    self.device_display_name = f"UNet INT8 NCNN ({get_cpu_info()})"
+                    self.prev_chosen_centroid = None
+                    return True
+                else:
+                    self.load_error = f"Không thể nạp file NCNN INT8: {param_path}"
+                    return False
+            except Exception as e_unet:
+                self.load_error = f"Lỗi khởi tạo NCNN INT8: {e_unet}"
+                return False
 
         try:
             from ultralytics import YOLO
@@ -331,6 +367,82 @@ class YoloSegmenter:
         t_start = time.perf_counter()
         device_used = self.device_display_name
         fallback_reason = self.fallback_reason
+
+        # === 0. UNET INT8 NCNN FAST SEMANTIC SEGMENTATION ===
+        if getattr(self, "is_unet_int8", False) and self.ncnn_net is not None:
+            try:
+                import ncnn
+                eff_sz = 320
+                resized_bgr = cv2.resize(frame_bgr, (eff_sz, eff_sz), interpolation=cv2.INTER_LINEAR)
+                rgb_contiguous = np.ascontiguousarray(cv2.cvtColor(resized_bgr, cv2.COLOR_BGR2RGB))
+                in_mat = ncnn.Mat.from_pixels(rgb_contiguous, ncnn.Mat.PixelType.PIXEL_RGB, eff_sz, eff_sz)
+                in_mat.substract_mean_normalize([0.0, 0.0, 0.0], [1.0 / 255.0, 1.0 / 255.0, 1.0 / 255.0])
+
+                ex = self.ncnn_net.create_extractor()
+                ex.input("in0", in_mat)
+                ret, out_mat = ex.extract("out0")
+                prob_map = np.array(out_mat, dtype=np.float32)
+                if prob_map.ndim == 3:
+                    prob_map = prob_map[0]
+
+                thresh = effective_conf if (effective_conf and effective_conf > 0.05) else 0.5
+                mask_320 = (prob_map >= thresh).astype(np.uint8) * 255
+                mask_orig = cv2.resize(mask_320, (w_img, h_img), interpolation=cv2.INTER_NEAREST)
+
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+                mask_clean = cv2.morphologyEx(mask_orig, cv2.MORPH_OPEN, kernel)
+
+                all_instances = []
+                chosen_instance = None
+                chosen_mask = np.zeros((h_img, w_img), dtype=np.uint8)
+                contours, _ = cv2.findContours(mask_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+                if contours:
+                    largest_cnt = max(contours, key=cv2.contourArea)
+                    area = int(cv2.contourArea(largest_cnt))
+                    if area > 300:
+                        x, y, w, h = cv2.boundingRect(largest_cnt)
+                        M = cv2.moments(largest_cnt)
+                        cx = int(M["m10"] / M["m00"]) if M["m00"] > 0 else (x + w // 2)
+                        cy = int(M["m01"] / M["m00"]) if M["m00"] > 0 else (y + h // 2)
+                        inst_mask = np.zeros((h_img, w_img), dtype=np.uint8)
+                        cv2.drawContours(inst_mask, [largest_cnt], -1, 255, -1)
+                        chosen_mask = inst_mask
+
+                        chosen_instance = InstanceDetection(
+                            instance_id=0,
+                            class_id=0,
+                            class_name="bat_loi_di",
+                            confidence=float(np.mean(prob_map[mask_320 > 0])) if (mask_320 > 0).any() else 0.95,
+                            bbox=(x, y, x + w, y + h),
+                            mask=inst_mask,
+                            area_px=area,
+                            centroid=(cx, cy),
+                            bottom_y=y + h
+                        )
+                        all_instances.append(chosen_instance)
+
+                inference_time_ms = (time.perf_counter() - t_start) * 1000.0
+                return YoloResult(
+                    is_valid=True,
+                    chosen_mask=chosen_mask,
+                    chosen_instance=chosen_instance,
+                    all_instances=all_instances,
+                    chosen_index=0 if chosen_instance else -1,
+                    chosen_confidence=chosen_instance.confidence if chosen_instance else None,
+                    inference_time_ms=inference_time_ms,
+                    model_name=os.path.basename(self.model_path or "model_int8"),
+                    class_names={0: "bat_loi_di"},
+                    frame_shape=(h_img, w_img),
+                    device_used=self.device_display_name,
+                    fallback_reason=""
+                )
+            except Exception as e_inf:
+                return YoloResult(
+                    is_valid=False,
+                    error_message=f"Lỗi suy luận UNet INT8: {e_inf}",
+                    frame_shape=(h_img, w_img)
+                )
 
         # === 1. ULTRA-FAST DIRECT NCNN C++ EXECUTION (ARM NEON ZERO-OVERHEAD) ===
         if self.ncnn_net is not None:
