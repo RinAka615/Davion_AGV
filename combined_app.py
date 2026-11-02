@@ -52,11 +52,7 @@ if CURRENT_DIR not in sys.path:
     sys.path.insert(0, CURRENT_DIR)
 
 # Import module Line Tracking
-try:
-    from src.video_reader import find_orbbec_camera_index
-except ImportError:
-    def find_orbbec_camera_index(default: int = 2) -> int:
-        return default
+from src.video_reader import find_orbbec_camera_index
 from src.yolo_segmenter import YoloSegmenter, is_cuda_available_and_working
 from src.path_detector import PathDetector, TrackingState, DetectionResult
 from src.main_window import draw_dashed_polyline, draw_dashed_line
@@ -212,6 +208,13 @@ class CombinedRobotApp(QMainWindow):
         self.last_frame_bgr: Optional[np.ndarray] = None
         self.camera_start_time = 0.0
 
+        # --- 0. TÍNH NĂNG QUAY / GHI HÌNH VIDEO (VIDEO RECORDER) ---
+        self.is_recording = False
+        self.video_writer: Optional[cv2.VideoWriter] = None
+        self.record_start_time = 0.0
+        self.record_frame_count = 0
+        self.record_filepath: Optional[str] = None
+
         # --- 1. KHỞI TẠO ĐỘNG CƠ DÒ ĐƯỜNG (LINE TRACKING) ---
         self.yolo = YoloSegmenter()
         self.path_detector = PathDetector()
@@ -238,9 +241,11 @@ class CombinedRobotApp(QMainWindow):
         # --- 4. MÁY TRẠNG THÁI NHIỆM VỤ CHUYỂN HƯỚNG QR (TURN 1 -> TURN 2) ---
         self.qr_mission = QRTurnMissionManager(
             stop_duration_sec=1.0,
-            align_tolerance_px=40.0,
+            align_tolerance_px=100.0,
             min_stop_qr_dim=200.0,
-            auto_reset_delay_sec=3.0
+            auto_reset_delay_sec=3.0,
+            path_seek_tolerance_px=200.0,
+            path_seek_max_angle_deg=20.0
         )
 
         self._init_ui()
@@ -302,12 +307,21 @@ class CombinedRobotApp(QMainWindow):
         self.btn_snapshot = QPushButton("📸 Chụp Ảnh Frame")
         self.btn_snapshot.clicked.connect(self._take_snapshot)
 
+        self.btn_record_video = QPushButton("🎥 Bật Ghi Video")
+        self.btn_record_video.setToolTip("Bật hoặc Dừng quay video hành trình kèm thông số HUD")
+        self.btn_record_video.clicked.connect(self._toggle_record_video)
+
+        self.lbl_record_badge = QLabel("")
+        self.lbl_record_badge.setStyleSheet("color: #f7768e; font-weight: bold; padding: 0 4px;")
+
         self.lbl_source_info = QLabel("Chưa mở nguồn nào")
         self.lbl_source_info.setStyleSheet("color: #bb9af7; font-weight: bold;")
 
         src_bar.addWidget(btn_open_file)
         src_bar.addWidget(self.btn_open_cam)
         src_bar.addWidget(self.btn_snapshot)
+        src_bar.addWidget(self.btn_record_video)
+        src_bar.addWidget(self.lbl_record_badge)
         src_bar.addWidget(self.lbl_source_info)
         src_bar.addStretch()
         left_layout.addLayout(src_bar)
@@ -527,6 +541,80 @@ class CombinedRobotApp(QMainWindow):
         self.lbl_mission_status.setStyleSheet("color: #7dcfff; font-size: 12px; font-weight: bold;")
         grp_mission_layout.addWidget(self.lbl_mission_status)
 
+        # Cấu hình dung sai bắt tâm TURN_2
+        row_align_tol = QHBoxLayout()
+        lbl_align_tol = QLabel("🎯 Dung sai bắt tâm TURN_2 (±px):")
+        lbl_align_tol.setStyleSheet("color: #a9b1d6; font-size: 11px;")
+        self.spin_align_tol = QSpinBox()
+        self.spin_align_tol.setRange(20, 300)
+        self.spin_align_tol.setValue(100)
+        self.spin_align_tol.setSingleStep(5)
+        self.spin_align_tol.setSuffix(" px")
+        self.spin_align_tol.setToolTip("Khoảng cách tối đa so với tâm giữa camera để khóa dừng xe. Giá trị càng lớn (100-120px) càng bắt nhạy và không bị quay lố.")
+        self.spin_align_tol.setStyleSheet("""
+            QSpinBox {
+                background-color: #1a1b26;
+                color: #7aa2f7;
+                border: 1px solid #3d59a1;
+                border-radius: 4px;
+                padding: 2px 6px;
+                font-weight: bold;
+            }
+        """)
+        self.spin_align_tol.valueChanged.connect(self._on_align_tol_changed)
+        row_align_tol.addWidget(lbl_align_tol)
+        row_align_tol.addWidget(self.spin_align_tol)
+        grp_mission_layout.addLayout(row_align_tol)
+
+        # Cấu hình dung sai bắt luống mới (Cách 3: Offset + Góc nghiêng)
+        row_path_tol = QHBoxLayout()
+        lbl_path_tol = QLabel("🌱 Bắt luống mới (|offset| ≤ px):")
+        lbl_path_tol.setStyleSheet("color: #a9b1d6; font-size: 11px;")
+        self.spin_path_seek_tol = QSpinBox()
+        self.spin_path_seek_tol.setRange(50, 500)
+        self.spin_path_seek_tol.setValue(200)
+        self.spin_path_seek_tol.setSingleStep(10)
+        self.spin_path_seek_tol.setSuffix(" px")
+        self.spin_path_seek_tol.setToolTip("Ngưỡng độ lệch tâm luống tối đa để robot dừng xoay và bắt đầu chạy bám luống (mặc định 200px)")
+        self.spin_path_seek_tol.setStyleSheet("""
+            QSpinBox {
+                background-color: #1a1b26;
+                color: #7aa2f7;
+                border: 1px solid #3d59a1;
+                border-radius: 4px;
+                padding: 2px 6px;
+                font-weight: bold;
+            }
+        """)
+        self.spin_path_seek_tol.valueChanged.connect(self._on_path_seek_tol_changed)
+        row_path_tol.addWidget(lbl_path_tol)
+        row_path_tol.addWidget(self.spin_path_seek_tol)
+        grp_mission_layout.addLayout(row_path_tol)
+
+        row_path_angle = QHBoxLayout()
+        lbl_path_angle = QLabel("📐 Góc nghiêng luống (|góc| ≤ độ):")
+        lbl_path_angle.setStyleSheet("color: #a9b1d6; font-size: 11px;")
+        self.spin_path_seek_angle = QSpinBox()
+        self.spin_path_seek_angle.setRange(5, 60)
+        self.spin_path_seek_angle.setValue(20)
+        self.spin_path_seek_angle.setSingleStep(1)
+        self.spin_path_seek_angle.setSuffix(" °")
+        self.spin_path_seek_angle.setToolTip("Ngưỡng góc nghiêng tối đa giữa thân xe và luống để robot dừng xoay (mặc định 20 độ)")
+        self.spin_path_seek_angle.setStyleSheet("""
+            QSpinBox {
+                background-color: #1a1b26;
+                color: #7aa2f7;
+                border: 1px solid #3d59a1;
+                border-radius: 4px;
+                padding: 2px 6px;
+                font-weight: bold;
+            }
+        """)
+        self.spin_path_seek_angle.valueChanged.connect(self._on_path_seek_angle_changed)
+        row_path_angle.addWidget(lbl_path_angle)
+        row_path_angle.addWidget(self.spin_path_seek_angle)
+        grp_mission_layout.addLayout(row_path_angle)
+
         # Cấu hình tự động Reset sau khi xong (Cách 1)
         row_auto_reset = QHBoxLayout()
         lbl_auto_reset = QLabel("⏱️ Tự động Reset sau khi xong:")
@@ -695,8 +783,11 @@ class CombinedRobotApp(QMainWindow):
         btn_clear_hist.clicked.connect(self._clear_history)
         btn_export_jsonl = QPushButton("💾 Mở File Log JSONL")
         btn_export_jsonl.clicked.connect(self._open_jsonl_log)
+        btn_open_rec = QPushButton("🎬 Mở Thư Mục Video")
+        btn_open_rec.clicked.connect(self._open_recordings_folder)
         log_btn_bar.addWidget(btn_clear_hist)
         log_btn_bar.addWidget(btn_export_jsonl)
+        log_btn_bar.addWidget(btn_open_rec)
         log_btn_bar.addStretch()
         tab_log_layout.addLayout(log_btn_bar)
 
@@ -711,6 +802,8 @@ class CombinedRobotApp(QMainWindow):
         self.status_bar.showMessage("Hệ thống tích hợp Line + QR đã sẵn sàng.")
 
     def _choose_video_file(self):
+        if self.is_recording:
+            self._stop_recording()
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Chọn file video",
@@ -722,6 +815,8 @@ class CombinedRobotApp(QMainWindow):
 
     def _open_webcam(self):
         """Mở hoặc tắt Webcam phát luồng liên tục thời gian thực (Live Stream)"""
+        if self.is_recording:
+            self._stop_recording()
         if self.is_camera and self.cap is not None:
             self.timer.stop()
             self.cap.release()
@@ -816,6 +911,8 @@ class CombinedRobotApp(QMainWindow):
         self.lbl_source_info.setText("Chưa tìm thấy Webcam. Hãy gạt công tắc camera ở cạnh phải máy.")
 
     def load_source(self, source_path: str):
+        if self.is_recording:
+            self._stop_recording()
         if self.cap is not None:
             self.cap.release()
             self.cap = None
@@ -907,6 +1004,8 @@ class CombinedRobotApp(QMainWindow):
         ret, frame = self.cap.read()
         if not ret:
             if not self.is_camera:
+                if self.is_recording:
+                    self._stop_recording()
                 self._toggle_play_pause()
                 self.status_bar.showMessage("Đã phát hết video.")
             return
@@ -1032,6 +1131,12 @@ class CombinedRobotApp(QMainWindow):
             self.qr_mission.is_enabled = self.chk_mission_enabled.isChecked() if hasattr(self, "chk_mission_enabled") else True
             if hasattr(self, "spin_qr_stop_thresh"):
                 self.qr_mission.min_stop_qr_dim = float(self.spin_qr_stop_thresh.value())
+            if hasattr(self, "spin_align_tol"):
+                self.qr_mission.align_tolerance_px = float(self.spin_align_tol.value())
+            if hasattr(self, "spin_path_seek_tol"):
+                self.qr_mission.path_seek_tolerance_px = float(self.spin_path_seek_tol.value())
+            if hasattr(self, "spin_path_seek_angle"):
+                self.qr_mission.path_seek_max_angle_deg = float(self.spin_path_seek_angle.value())
             fused_nav = self.qr_mission.process(
                 base_nav=fused_nav,
                 qr_results=qr_results,
@@ -1234,7 +1339,7 @@ class CombinedRobotApp(QMainWindow):
             0: "⚪ B4=0 (CHẠY)",
             1: "🛑 B4=1 (TRẠM TURN_1)",
             2: "🎉 B4=2 (TÂM TURN_2)",
-            3: "↪️ B4=3 (XOAY PHẢI TÌM ĐƯỜNG)"
+            3: "↩️ B4=3 (XOAY TRÁI TÌM ĐƯỜNG)"
         }
         stop_badge = stop_badge_map.get(fused_nav.uart_flag_byte, f"B4={fused_nav.uart_flag_byte}")
         hud_txt = f"ROBOT AGV HUD | {line_stat_short} ({fused_nav.offset_direction}) | {stop_badge} | {qr_stat_short} | FPS: {fps_current:.1f}"
@@ -1250,11 +1355,35 @@ class CombinedRobotApp(QMainWindow):
                 banner_bg = (60, 40, 20)
             elif fused_nav.mission_state == QRTurnMissionState.COMPLETED_STOPPED.value:
                 banner_bg = (20, 80, 40)
-                banner_bg = (20, 80, 40)
             cv2.rectangle(vis_frame, (10, 48), (fw - 10, 48 + overlay_h), banner_bg, -1)
             cv2.rectangle(vis_frame, (10, 48), (fw - 10, 48 + overlay_h), (187, 154, 247), 2)
             cv2.putText(vis_frame, f"[NHIỆM VỤ QR] {fused_nav.mission_status_desc}", (20, 72),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.60, (0, 255, 255), 2, cv2.LINE_AA)
+
+        # 3.6 Nếu đang Ghi Video: Vẽ ký hiệu REC nhấp nháy và lưu frame vào file MP4
+        if self.is_recording:
+            rec_sec = int(time.time() - self.record_start_time)
+            mins, secs = divmod(rec_sec, 60)
+            rec_time_str = f"{mins:02d}:{secs:02d}"
+            # Hiệu ứng nhấp nháy chấm tròn đỏ mỗi 0.5s
+            blink_on = (int((time.time() - self.record_start_time) * 2) % 2) == 0
+            dot_color = (0, 0, 255) if blink_on else (80, 80, 80)
+            rec_x = fw - 165
+            if rec_x > 250:
+                cv2.circle(vis_frame, (rec_x, 21), 6, dot_color, -1)
+                cv2.putText(vis_frame, f"REC {rec_time_str}", (rec_x + 12, 27),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 2, cv2.LINE_AA)
+            self.btn_record_video.setText(f"🔴 Dừng Ghi ({rec_time_str})")
+            self.lbl_record_badge.setText(f"● REC {rec_time_str} ({self.record_frame_count}f)")
+            # Khởi tạo VideoWriter với kích thước chuẩn của frame
+            if self.video_writer is None and self.record_filepath:
+                rec_fps = self.fps if (not self.is_camera and self.fps > 0) else 30.0
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                self.video_writer = cv2.VideoWriter(self.record_filepath, fourcc, float(rec_fps), (fw, fh))
+            if self.video_writer is not None and self.video_writer.isOpened():
+                if vis_frame.shape[1] == fw and vis_frame.shape[0] == fh:
+                    self.video_writer.write(vis_frame)
+                    self.record_frame_count += 1
 
         # Hiển thị lên QLabel
         self._display_video_frame(vis_frame)
@@ -1409,6 +1538,21 @@ class CombinedRobotApp(QMainWindow):
         if hasattr(self, "qr_mission"):
             self.qr_mission.auto_reset_delay_sec = float(val)
 
+    def _on_align_tol_changed(self, val: int):
+        if hasattr(self, "qr_mission") and self.qr_mission:
+            self.qr_mission.align_tolerance_px = float(val)
+        self._reprocess_current_frame()
+
+    def _on_path_seek_tol_changed(self, val: int):
+        if hasattr(self, "qr_mission") and self.qr_mission:
+            self.qr_mission.path_seek_tolerance_px = float(val)
+        self._reprocess_current_frame()
+
+    def _on_path_seek_angle_changed(self, val: int):
+        if hasattr(self, "qr_mission") and self.qr_mission:
+            self.qr_mission.path_seek_max_angle_deg = float(val)
+        self._reprocess_current_frame()
+
     def _step_forward(self):
         if not self.cap or self.is_camera:
             return
@@ -1456,6 +1600,68 @@ class CombinedRobotApp(QMainWindow):
         filepath = os.path.join(snap_dir, f"combined_snap_{int(time.time()*1000)}.jpg")
         cv2.imwrite(filepath, self.last_frame_bgr)
         self.status_bar.showMessage(f"✔ Đã chụp và lưu ảnh vào: {filepath}")
+
+    def _toggle_record_video(self):
+        """Bật hoặc Dừng quay video hành trình kèm HUD."""
+        if self.is_recording:
+            self._stop_recording()
+        else:
+            self._start_recording()
+
+    def _start_recording(self):
+        if not self.cap or not self.cap.isOpened():
+            QMessageBox.warning(self, "Thông báo", "Vui lòng mở video hoặc webcam trước khi quay video!")
+            return
+
+        rec_dir = os.path.join(CURRENT_DIR, "output_qr", "recordings")
+        os.makedirs(rec_dir, exist_ok=True)
+        timestamp_str = time.strftime("%Y%m%d_%H%M%S")
+        self.record_filepath = os.path.join(rec_dir, f"robot_record_{timestamp_str}.mp4")
+
+        self.video_writer = None
+        self.record_start_time = time.time()
+        self.record_frame_count = 0
+        self.is_recording = True
+
+        self.btn_record_video.setText("🔴 Dừng Ghi (00:00)")
+        self.btn_record_video.setStyleSheet("background-color: #f7768e; color: #15161e; font-weight: bold;")
+        self.lbl_record_badge.setText("● REC")
+        self.status_bar.showMessage(f"🔴 Bắt đầu ghi hình video: {os.path.basename(self.record_filepath)}")
+
+    def _stop_recording(self):
+        if not self.is_recording and self.video_writer is None:
+            return
+
+        self.is_recording = False
+        duration_sec = time.time() - self.record_start_time if self.record_start_time > 0 else 0.0
+        saved_path = self.record_filepath
+        frames_saved = self.record_frame_count
+
+        if self.video_writer is not None:
+            self.video_writer.release()
+            self.video_writer = None
+
+        self.btn_record_video.setText("🎥 Bật Ghi Video")
+        self.btn_record_video.setStyleSheet("")
+        self.lbl_record_badge.setText("")
+
+        if saved_path and os.path.exists(saved_path) and frames_saved > 0:
+            fname = os.path.basename(saved_path)
+            self.status_bar.showMessage(f"✔ Đã lưu video: {fname} ({frames_saved} frames, {duration_sec:.1f}s)")
+            self.lbl_record_badge.setText(f"✔ Đã lưu: {fname}")
+            self.lbl_record_badge.setStyleSheet("color: #7aa2f7; font-weight: bold; padding: 0 4px;")
+            QTimer.singleShot(4000, lambda: self.lbl_record_badge.setText("") if not self.is_recording else None)
+        else:
+            self.status_bar.showMessage("Đã dừng ghi video.")
+
+    def _open_recordings_folder(self):
+        rec_dir = os.path.abspath(os.path.join(CURRENT_DIR, "output_qr", "recordings"))
+        os.makedirs(rec_dir, exist_ok=True)
+        try:
+            import subprocess
+            subprocess.Popen(["xdg-open", rec_dir])
+        except Exception:
+            QMessageBox.information(self, "Thư Mục Video", f"Video được lưu tại:\n{rec_dir}")
 
     def _add_to_history(self, text: str, vid_time_sec: Optional[float], size_str: str, line_offset: Optional[float], backend: str, is_qr_mode: bool = False):
         row_pos = self.table_history.rowCount()
@@ -1579,6 +1785,8 @@ class CombinedRobotApp(QMainWindow):
 
     def closeEvent(self, event):
         self.timer.stop()
+        if self.is_recording:
+            self._stop_recording()
         if hasattr(self, "uart") and self.uart:
             self.uart.disconnect()
         if self.cap is not None:

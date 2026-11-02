@@ -123,7 +123,7 @@ class UartController:
         return ser
 
     def connect(self, port: Optional[str] = None, baudrate: Optional[int] = None) -> bool:
-        """Opens serial port connection."""
+        """Opens serial port connection with graceful fallback across candidate ports."""
         with self._lock:
             if port is not None:
                 self.port = port
@@ -131,17 +131,33 @@ class UartController:
                 self.baudrate = baudrate
 
             self.disconnect()
-            try:
-                self.ser = self._create_serial_instance()
-                self.is_connected = True
-                self.last_error = ""
-                return True
-            except Exception as e:
-                self.ser = None
-                self.is_connected = False
-                self.last_error = str(e)
-                self.errors_count += 1
-                return False
+
+            # Build candidate ports to attempt connection
+            candidates = [self.port]
+            if self.port in ("/dev/ttySTM32", "/dev/stm32"):
+                for p in sorted(glob.glob("/dev/ttyUSB*")) + sorted(glob.glob("/dev/ttyACM*")) + ["/dev/ttyAMA0", "/dev/ttyAMA10", "/dev/serial0"]:
+                    if p not in candidates and os.path.exists(p):
+                        candidates.append(p)
+            elif self.port.startswith("/dev/ttyUSB"):
+                if os.path.exists("/dev/ttySTM32") and "/dev/ttySTM32" not in candidates:
+                    candidates.insert(0, "/dev/ttySTM32")
+
+            last_err = ""
+            for p in candidates:
+                try:
+                    self.port = p
+                    self.ser = self._create_serial_instance()
+                    self.is_connected = True
+                    self.last_error = ""
+                    return True
+                except Exception as e:
+                    last_err = str(e)
+
+            self.ser = None
+            self.is_connected = False
+            self.last_error = last_err
+            self.errors_count += 1
+            return False
 
     def disconnect(self):
         """Closes serial connection safely."""

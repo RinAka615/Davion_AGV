@@ -58,11 +58,24 @@ export OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-2}
 export TORCH_NUM_THREADS=${TORCH_NUM_THREADS:-2}
 
 # 2. Xử lý tham số truyền vào hoặc chọn video mẫu nhà màng
-if [ $# -gt 0 ]; then
-    echo "▶ Khởi chạy với file video chỉ định: $@"
-    exec "$PYTHON_EXE" combined_app.py "$@"
-else
-    # Ưu tiên video quay lối đi nhà màng thực tế
+ARGS=("$@")
+HAS_VIDEO=false
+HAS_UART_FLAG=false
+for arg in "$@"; do
+    if [ "$arg" = "--uart" ]; then
+        HAS_UART_FLAG=true
+    fi
+    if [ -f "$arg" ] || [[ "$arg" =~ \.(mp4|avi|mkv|mov)$ ]]; then
+        HAS_VIDEO=true
+    fi
+done
+
+if [ "$HAS_UART_FLAG" = false ] && { [ -e "/dev/ttySTM32" ] || [ -e "/dev/ttyUSB0" ]; }; then
+    echo "▶ Tự động phát hiện cổng STM32 -> Tự động bật truyền UART (--uart)"
+    ARGS=(--uart "${ARGS[@]}")
+fi
+
+if [ "$HAS_VIDEO" = false ]; then
     SAMPLE_VIDEO="$PROJECT_DIR/nhamang_20261025_030235.mp4"
     if [ ! -f "$SAMPLE_VIDEO" ]; then
         SAMPLE_VIDEO="$PROJECT_DIR/2aobor4lgjkrognqzs1jz63kldqrlxveqvfef1rw4.mp4"
@@ -75,9 +88,9 @@ else
         echo "▶ Tự động nạp video mẫu nhà màng: $(basename "$SAMPLE_VIDEO")"
         echo "  (Bạn có thể bấm '📂 Chọn Video...' trên giao diện để chọn bất kỳ video nào khác)"
         echo "  (Hoặc bấm '📷 Mở Webcam (Live Stream)' để truyền trực tiếp từ camera)"
-        exec "$PYTHON_EXE" combined_app.py "$SAMPLE_VIDEO"
-    else
-        echo "▶ Mở giao diện ứng dụng..."
-        exec "$PYTHON_EXE" combined_app.py
+        ARGS=("$SAMPLE_VIDEO" "${ARGS[@]}")
     fi
 fi
+
+echo "▶ Khởi chạy giao diện với tham số: ${ARGS[*]}"
+exec "$PYTHON_EXE" combined_app.py "${ARGS[@]}"
