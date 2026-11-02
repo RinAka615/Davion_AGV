@@ -48,13 +48,7 @@ else
     fi
 fi
 
-if [ -d "$PROJECT_DIR/models/nhamang_pico_seg_ncnn_model" ]; then
-    MODEL_FILE="$PROJECT_DIR/models/nhamang_pico_seg_ncnn_model"
-    PROFILE_ARGS=(--profile "$PROJECT_DIR/profiles/nhamang_batden_profile.json")
-elif [ -d "$PROJECT_DIR/models/nhamang_batden_seg_ncnn_model" ]; then
-    MODEL_FILE="$PROJECT_DIR/models/nhamang_batden_seg_ncnn_model"
-    PROFILE_ARGS=(--profile "$PROJECT_DIR/profiles/nhamang_batden_profile.json")
-elif [ -f "$PROJECT_DIR/models/nhamang_batden_seg.pt" ]; then
+if [ -f "$PROJECT_DIR/models/nhamang_batden_seg.pt" ]; then
     MODEL_FILE="$PROJECT_DIR/models/nhamang_batden_seg.pt"
     PROFILE_ARGS=(--profile "$PROJECT_DIR/profiles/nhamang_batden_profile.json")
 else

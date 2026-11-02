@@ -423,20 +423,14 @@ class MainWindow(QMainWindow):
 
         # Device & YOLO Segmenter
         self._explicit_initial_model = initial_model_path if (initial_model_path and os.path.exists(initial_model_path)) else None
-        pico_ncnn = os.path.join(PROJECT_ROOT, "models", "nhamang_pico_seg_ncnn_model")
-        nano_ncnn = os.path.join(PROJECT_ROOT, "models", "nhamang_batden_seg_ncnn_model")
         nhamang_model = os.path.join(PROJECT_ROOT, "models", "nhamang_batden_seg.pt")
-        if os.path.exists(pico_ncnn):
-            fallback_model = pico_ncnn
-        elif os.path.exists(nano_ncnn):
-            fallback_model = nano_ncnn
-        elif os.path.exists(nhamang_model):
+        if os.path.exists(nhamang_model):
             fallback_model = nhamang_model
         else:
             fallback_model = os.path.join(PROJECT_ROOT, "models", "farm_path_bootstrap.pt")
         default_model = self._explicit_initial_model or fallback_model
         self.yolo_conf: float = 0.25
-        self.yolo_imgsz: int = 320 if ("ncnn" in default_model.lower() or "pico" in default_model.lower()) else 416
+        self.yolo_imgsz: int = 416
         self.cuda_status = get_cuda_status()
         if initial_device:
             self.yolo_device = initial_device
@@ -1271,12 +1265,7 @@ class MainWindow(QMainWindow):
         self.combo_model_preset.clear()
         models_dir = os.path.join(PROJECT_ROOT, "models")
         presets = [
-            ("⚡ Nano NCNN Quantized (256px - Siêu chính xác, ~30 FPS)", os.path.join(models_dir, "nhamang_nano_256_ncnn_model")),
-            ("🚀 Micro NCNN Quantized (256px - Cân bằng, ~40 FPS)", os.path.join(models_dir, "nhamang_micro_256_ncnn_model")),
-            ("⚡ Pico NCNN Quantized (320px - Siêu nhẹ, ~48 FPS)", os.path.join(models_dir, "nhamang_pico_seg_ncnn_model")),
-            ("🚀 Nano NCNN Quantized (320px - Chuẩn 320px, ~15 FPS)", os.path.join(models_dir, "nhamang_batden_seg_ncnn_model")),
-            ("🎯 Nano PyTorch Gốc (.pt - 416px)", os.path.join(models_dir, "nhamang_batden_seg.pt")),
-            ("⚡ Pico PyTorch (.pt - 320px)", os.path.join(models_dir, "nhamang_pico_seg.pt")),
+            ("🎯 Nano PyTorch Bạt đen (.pt - 416px)", os.path.join(models_dir, "nhamang_batden_seg.pt")),
             ("🎯 Thảm đen PyTorch (.pt)", os.path.join(models_dir, "thamden_seg.pt")),
             ("🎯 Bootstrap PyTorch (.pt)", os.path.join(models_dir, "farm_path_bootstrap.pt")),
         ]
