@@ -945,7 +945,7 @@ class CombinedRobotApp(QMainWindow):
 
         # Tối ưu nhịp quét QR trên CPU Pi 5:
         # - Nếu đang bám mã QR: Quét liên tục mỗi frame để dẫn hướng tâm QR mượt mà.
-        # - Nếu đang bám đường bình thường: Quét xen kẽ mỗi 2 frame (15 Hz) để đẩy FPS lên ~25-30 FPS.
+        # - Nếu đang bám đường bình thường: Quét ở nhịp 10 Hz (mỗi 3 frame, đồng bộ nhịp UART 0.1s) để đạt 25-28 FPS!
         if not hasattr(self, "_qr_frame_count"):
             self._qr_frame_count = 0
             self._cached_qr_results = []
@@ -953,7 +953,7 @@ class CombinedRobotApp(QMainWindow):
 
         should_scan_qr = (
             len(self._cached_qr_results) > 0 or
-            (self._qr_frame_count % 2 == 0)
+            (self._qr_frame_count % 3 == 0)
         )
 
         if should_scan_qr:
