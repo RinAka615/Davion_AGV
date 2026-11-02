@@ -22,4 +22,6 @@ __pycache__/
 # Training runs & caches
 runs/
 runs_train/
+datasets/
+record*.mp4
 *.cache

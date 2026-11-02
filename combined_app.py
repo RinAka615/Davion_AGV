@@ -421,6 +421,7 @@ class CombinedRobotApp(QMainWindow):
             "yolo_fastestv2_int8.param (YOLO-Fastest V2 INT8)",
             "picodet_int8.param (PicoDet INT8)",
             "model_int8.param (MobileNetV3-UNet INT8)",
+            "yolov8_record1_seg.pt (YOLOv8 Đa góc độ & Ánh sáng)",
             "nhamang_batden_seg.pt (Bạt đen nhà màng)",
             "farm_path_bootstrap.pt",
             "thamden_seg.pt"
@@ -1356,6 +1357,7 @@ class CombinedRobotApp(QMainWindow):
             "yolo_fastestv2_int8.param",
             "picodet_int8.param",
             "model_int8.param",
+            "yolov8_record1_seg.pt",
             "nhamang_batden_seg.pt",
             "farm_path_bootstrap.pt",
             "thamden_seg.pt"

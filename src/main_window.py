@@ -1269,6 +1269,7 @@ class MainWindow(QMainWindow):
             ("yolo_fastestv2_int8.param (YOLO-Fastest V2 INT8)", os.path.join(models_dir, "yolo_fastestv2_int8.param")),
             ("picodet_int8.param (PicoDet INT8)", os.path.join(models_dir, "picodet_int8.param")),
             ("model_int8.param (MobileNetV3-UNet INT8)", os.path.join(models_dir, "model_int8.param")),
+            ("yolov8_record1_seg.pt (YOLOv8 Đa góc độ & Ánh sáng)", os.path.join(models_dir, "yolov8_record1_seg.pt")),
             ("🎯 Nano PyTorch Bạt đen (.pt - 416px)", os.path.join(models_dir, "nhamang_batden_seg.pt")),
             ("🎯 Thảm đen PyTorch (.pt)", os.path.join(models_dir, "thamden_seg.pt")),
             ("🎯 Bootstrap PyTorch (.pt)", os.path.join(models_dir, "farm_path_bootstrap.pt")),
