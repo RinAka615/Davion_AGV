@@ -387,7 +387,7 @@ class CombinedRobotApp(QMainWindow):
         model_row.addWidget(QLabel("Model:"))
         self.combo_model = QComboBox()
         self.combo_model.addItems([
-            "model_int8.param (⚡ MobileNetV3-UNet INT8 - Siêu nhẹ ~66 FPS)",
+            "model_int8.param (MobileNetV3-UNet INT8)",
             "nhamang_batden_seg.pt (Bạt đen nhà màng - PyTorch)",
             "farm_path_bootstrap.pt",
             "thamden_seg.pt"
