@@ -216,24 +216,29 @@ class CombinedRobotApp(QMainWindow):
         self.logger = QRJsonLogger(log_path="output_qr/combined_mission_events.jsonl", dedup_cooldown_sec=2.0)
 
         # --- 3. ĐIỀU KHIỂN TRUYỀN THÔNG UART STM32 ---
-        self.uart = UartController(port="/dev/ttySTM32", baudrate=115200, is_enabled=False)
+        self.uart = UartController(port="/dev/ttySTM32", baudrate=115200, is_enabled=True)
 
         # Timer vòng lặp hiển thị
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._on_timer_tick)
 
         self._init_ui()
+        self.chk_uart_enable.setChecked(True)
 
-        # Nạp video mẫu
-        if initial_video and os.path.exists(initial_video):
-            self.load_source(initial_video)
-        else:
-            default_vid = os.path.join(CURRENT_DIR, "nhamang_20261025_030235.mp4")
-            test_vid = os.path.join(CURRENT_DIR, "test_qr_dataset", "test_qr_multiscene.mp4")
-            if os.path.exists(default_vid):
-                self.load_source(default_vid)
-            elif os.path.exists(test_vid):
-                self.load_source(test_vid)
+        # Tự động ưu tiên mở Webcam USB nếu đang cắm (/dev/video0..9), nếu chưa cắm thì nạp video mẫu
+        has_usb_cam = any(os.path.exists(f"/dev/video{i}") for i in range(10))
+        if has_usb_cam:
+            self._open_webcam()
+        if not self.is_camera:
+            if initial_video and os.path.exists(initial_video):
+                self.load_source(initial_video)
+            else:
+                default_vid = os.path.join(CURRENT_DIR, "nhamang_20261025_030235.mp4")
+                test_vid = os.path.join(CURRENT_DIR, "test_qr_dataset", "test_qr_multiscene.mp4")
+                if os.path.exists(default_vid):
+                    self.load_source(default_vid)
+                elif os.path.exists(test_vid):
+                    self.load_source(test_vid)
 
     def _load_best_yolo_model(self):
         models = [

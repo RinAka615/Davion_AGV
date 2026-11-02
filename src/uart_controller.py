@@ -85,12 +85,15 @@ class UartController:
             if os.path.exists(p) and p not in ports:
                 ports.append(p)
 
-        # Check standard USB serial devices
+        # Check standard USB & Pi hardware serial devices
         for p in sorted(glob.glob("/dev/ttyUSB*")):
             if p not in ports:
                 ports.append(p)
         for p in sorted(glob.glob("/dev/ttyACM*")):
             if p not in ports:
+                ports.append(p)
+        for p in ("/dev/ttyAMA0", "/dev/ttyAMA10", "/dev/serial0"):
+            if os.path.exists(p) and p not in ports:
                 ports.append(p)
 
         if not ports:
@@ -98,6 +101,12 @@ class UartController:
         return ports
 
     def _create_serial_instance(self) -> serial.Serial:
+        if not os.path.exists(self.port):
+            avail = self.list_available_ports()
+            for candidate in avail:
+                if os.path.exists(candidate):
+                    self.port = candidate
+                    break
         ser = serial.Serial()
         ser.port = self.port
         ser.baudrate = self.baudrate
