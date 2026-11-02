@@ -263,12 +263,11 @@ class CombinedRobotApp(QMainWindow):
 
     def _load_best_yolo_model(self):
         models = [
-            os.path.join(CURRENT_DIR, "models", "fast_scnn_int8.param"),
             os.path.join(CURRENT_DIR, "models", "yolo_fastestv2_int8.param"),
+            os.path.join(CURRENT_DIR, "models", "fast_scnn_int8.param"),
             os.path.join(CURRENT_DIR, "models", "picodet_int8.param"),
             os.path.join(CURRENT_DIR, "models", "model_int8.param"),
             os.path.join(CURRENT_DIR, "models", "nhamang_batden_seg.pt"),
-            os.path.join(CURRENT_DIR, "models", "farm_path_bootstrap.pt"),
             os.path.join(CURRENT_DIR, "models", "thamden_seg.pt")
         ]
         for m in models:
@@ -435,14 +434,12 @@ class CombinedRobotApp(QMainWindow):
         model_row.addWidget(QLabel("Model:"))
         self.combo_model = QComboBox()
         self.combo_model.addItems([
-            "fast_scnn_int8.param (Fast-SCNN INT8)",
-            "yolo_fastestv2_int8.param (YOLO-Fastest V2 INT8)",
-            "picodet_int8.param (PicoDet INT8)",
-            "model_int8.param (MobileNetV3-UNet INT8)",
-            "yolov8_record1_seg.pt (YOLOv8 Đa góc độ & Ánh sáng)",
-            "nhamang_batden_seg.pt (Bạt đen nhà màng)",
-            "farm_path_bootstrap.pt",
-            "thamden_seg.pt"
+            "YOLO-Fastest V2 (NCNN INT8)",
+            "Fast-SCNN (NCNN INT8)",
+            "PicoDet (NCNN INT8)",
+            "MobileNetV3-UNet (NCNN INT8)",
+            "YOLOv8 Seg (.pt)",
+            "Thảm đen (.pt)"
         ])
         self.combo_model.currentIndexChanged.connect(self._on_model_combo_changed)
         model_row.addWidget(self.combo_model)
@@ -1486,13 +1483,11 @@ class CombinedRobotApp(QMainWindow):
 
     def _on_model_combo_changed(self, idx: int):
         model_names = [
-            "fast_scnn_int8.param",
             "yolo_fastestv2_int8.param",
+            "fast_scnn_int8.param",
             "picodet_int8.param",
             "model_int8.param",
-            "yolov8_record1_seg.pt",
             "nhamang_batden_seg.pt",
-            "farm_path_bootstrap.pt",
             "thamden_seg.pt"
         ]
         if idx < len(model_names):

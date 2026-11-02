@@ -1265,14 +1265,12 @@ class MainWindow(QMainWindow):
         self.combo_model_preset.clear()
         models_dir = os.path.join(PROJECT_ROOT, "models")
         presets = [
-            ("fast_scnn_int8.param (Fast-SCNN INT8)", os.path.join(models_dir, "fast_scnn_int8.param")),
-            ("yolo_fastestv2_int8.param (YOLO-Fastest V2 INT8)", os.path.join(models_dir, "yolo_fastestv2_int8.param")),
-            ("picodet_int8.param (PicoDet INT8)", os.path.join(models_dir, "picodet_int8.param")),
-            ("model_int8.param (MobileNetV3-UNet INT8)", os.path.join(models_dir, "model_int8.param")),
-            ("yolov8_record1_seg.pt (YOLOv8 Đa góc độ & Ánh sáng)", os.path.join(models_dir, "yolov8_record1_seg.pt")),
-            ("🎯 Nano PyTorch Bạt đen (.pt - 416px)", os.path.join(models_dir, "nhamang_batden_seg.pt")),
-            ("🎯 Thảm đen PyTorch (.pt)", os.path.join(models_dir, "thamden_seg.pt")),
-            ("🎯 Bootstrap PyTorch (.pt)", os.path.join(models_dir, "farm_path_bootstrap.pt")),
+            ("YOLO-Fastest V2 (NCNN INT8)", os.path.join(models_dir, "yolo_fastestv2_int8.param")),
+            ("Fast-SCNN (NCNN INT8)", os.path.join(models_dir, "fast_scnn_int8.param")),
+            ("PicoDet (NCNN INT8)", os.path.join(models_dir, "picodet_int8.param")),
+            ("MobileNetV3-UNet (NCNN INT8)", os.path.join(models_dir, "model_int8.param")),
+            ("YOLOv8 Seg (.pt)", os.path.join(models_dir, "nhamang_batden_seg.pt")),
+            ("Thảm đen (.pt)", os.path.join(models_dir, "thamden_seg.pt")),
         ]
         cur_abs = os.path.abspath(self.segmenter.model_path) if self.segmenter.model_path else ""
         sel_idx = -1
