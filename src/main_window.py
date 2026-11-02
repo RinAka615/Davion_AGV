@@ -1265,6 +1265,7 @@ class MainWindow(QMainWindow):
         self.combo_model_preset.clear()
         models_dir = os.path.join(PROJECT_ROOT, "models")
         presets = [
+            ("fast_scnn_int8.param (Fast-SCNN INT8)", os.path.join(models_dir, "fast_scnn_int8.param")),
             ("model_int8.param (MobileNetV3-UNet INT8)", os.path.join(models_dir, "model_int8.param")),
             ("🎯 Nano PyTorch Bạt đen (.pt - 416px)", os.path.join(models_dir, "nhamang_batden_seg.pt")),
             ("🎯 Thảm đen PyTorch (.pt)", os.path.join(models_dir, "thamden_seg.pt")),

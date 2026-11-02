@@ -385,11 +385,11 @@ class YoloSegmenter:
                 if prob_map.ndim == 3:
                     prob_map = prob_map[0]
 
-                thresh = effective_conf if (effective_conf and effective_conf > 0.05) else 0.5
+                thresh = max(float(effective_conf or 0.62), 0.62)
                 mask_320 = (prob_map >= thresh).astype(np.uint8) * 255
                 mask_orig = cv2.resize(mask_320, (w_img, h_img), interpolation=cv2.INTER_NEAREST)
 
-                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
                 mask_clean = cv2.morphologyEx(mask_orig, cv2.MORPH_OPEN, kernel)
 
                 all_instances = []
