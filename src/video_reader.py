@@ -2,11 +2,48 @@
 Module for thread-safe video playback and frame navigation.
 """
 
+import glob
+import os
 import threading
 import time
 from typing import Any, Optional, Tuple, Union
 import cv2
 import numpy as np
+
+
+def find_orbbec_camera_index(default: int = 2) -> int:
+    """Tự động phát hiện cổng camera Orbbec Astra Pro HD từ hệ điều hành Linux.
+    Ưu tiên Orbbec Astra Pro hơn webcam tích hợp của laptop.
+    """
+    # 1. Quét tên thiết bị trong /sys/class/video4linux/video*/name
+    for name_file in sorted(glob.glob("/sys/class/video4linux/video*/name")):
+        try:
+            with open(name_file, "r") as f:
+                name = f.read().lower()
+                if "astra pro" in name or "orbbec" in name:
+                    v_dir = os.path.dirname(name_file)
+                    dev_num = os.path.basename(v_dir).replace("video", "")
+                    if dev_num.isdigit():
+                        return int(dev_num)
+        except Exception:
+            pass
+
+    # 2. Quét symlink persistent trong /dev/v4l/by-id
+    for p in sorted(glob.glob("/dev/v4l/by-id/*")):
+        if "astra" in p.lower() or "orbbec" in p.lower():
+            try:
+                real = os.path.realpath(p)
+                dev_num = os.path.basename(real).replace("video", "")
+                if dev_num.isdigit():
+                    return int(dev_num)
+            except Exception:
+                pass
+
+    # 3. Nếu có /dev/video2 (vị trí cổng camera USB ngoài phổ biến)
+    if os.path.exists("/dev/video2"):
+        return 2
+
+    return default
 
 
 class VideoReader:
@@ -38,7 +75,10 @@ class VideoReader:
             is_camera = False
             device = video_path
 
-            if isinstance(video_path, int):
+            if video_path in (None, "camera", "orbbec", "auto"):
+                is_camera = True
+                device = find_orbbec_camera_index()
+            elif isinstance(video_path, int):
                 is_camera = True
             elif isinstance(video_path, str):
                 s_strip = video_path.strip()
@@ -47,10 +87,18 @@ class VideoReader:
                     device = int(s_strip)
                 elif s_strip.startswith("/dev/video"):
                     is_camera = True
-                    device = s_strip
+                    suffix = s_strip.replace("/dev/video", "")
+                    device = int(suffix) if suffix.isdigit() else s_strip
+                elif "/by-id/" in s_strip or "/by-path/" in s_strip:
+                    is_camera = True
+                    real = os.path.realpath(s_strip)
+                    suffix = os.path.basename(real).replace("video", "")
+                    device = int(suffix) if suffix.isdigit() else real
 
             if is_camera:
-                cap = cv2.VideoCapture(device)
+                cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
+                if not cap.isOpened():
+                    cap = cv2.VideoCapture(device)
                 if not cap.isOpened():
                     return False
 
