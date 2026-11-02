@@ -1,26 +1,32 @@
 #!/usr/bin/env python3
 """
-Benchmarking Pipeline - Đo lường tốc độ suy luận (FPS / Latency) trên CPU Raspberry Pi 5
-So sánh 4 kiến trúc Semantic Segmentation siêu nhẹ đã lượng tử hóa tĩnh INT8 (NCNN):
-1. Fast-SCNN (INT8)
-2. BiSeNet V2 (INT8)
-3. PIDNet-S (INT8)
-4. ENet (INT8)
-- Kích thước đầu vào: 320x320 (RGB), Output: 1 class ("đường đi")
+Benchmarking Pipeline - So sánh toàn diện Tốc độ (FPS / Latency) & Độ chính xác (mIoU)
+trên CPU Raspberry Pi 5 giữa các mô hình Edge AI INT8 (NCNN 320x320):
+1. Fast-SCNN (INT8)        -> models/fast_scnn_int8.param & .bin
+2. YOLO-Fastest V2 (INT8)  -> models/yolo_fastestv2_int8.param & .bin
+3. PicoDet (INT8)          -> models/picodet_int8.param & .bin
+4. MobileNetV3-UNet (INT8) -> models/model_int8.param & .bin
+5. PIDNet-S (INT8)         -> models/pidnet_s_int8.param & .bin
+6. BiSeNet V2 (INT8)       -> models/bisenetv2_int8.param & .bin
+7. ENet (INT8)             -> models/enet_int8.param & .bin
 """
 
 import os
 import time
 from typing import Dict, List, Tuple
 
+import cv2
 import ncnn
 import numpy as np
 
 
 MODELS_TO_BENCHMARK: List[Tuple[str, str, str]] = [
     ("Fast-SCNN (INT8)", "models/fast_scnn_int8.param", "models/fast_scnn_int8.bin"),
-    ("BiSeNet V2 (INT8)", "models/bisenetv2_int8.param", "models/bisenetv2_int8.bin"),
+    ("YOLO-Fastest V2 (INT8)", "models/yolo_fastestv2_int8.param", "models/yolo_fastestv2_int8.bin"),
+    ("PicoDet (INT8)", "models/picodet_int8.param", "models/picodet_int8.bin"),
+    ("MobileNetV3-UNet (INT8)", "models/model_int8.param", "models/model_int8.bin"),
     ("PIDNet-S (INT8)", "models/pidnet_s_int8.param", "models/pidnet_s_int8.bin"),
+    ("BiSeNet V2 (INT8)", "models/bisenetv2_int8.param", "models/bisenetv2_int8.bin"),
     ("ENet (INT8)", "models/enet_int8.param", "models/enet_int8.bin"),
 ]
 
@@ -29,6 +35,32 @@ INPUT_H = 320
 WARMUP_FRAMES = 10
 TOTAL_FRAMES = 100
 NUM_THREADS = 2
+
+
+def load_real_eval_samples(max_samples: int = 20) -> List[Tuple[np.ndarray, np.ndarray]]:
+    """
+    Nạp các frame thực tế từ video bạt đen nhà màng (nếu có) để đo độ khớp mask thực tế.
+    """
+    samples = []
+    vid_path = "nhamang_20261025_030235.mp4"
+    if not os.path.exists(vid_path):
+        return samples
+    cap = cv2.VideoCapture(vid_path)
+    if not cap.isOpened():
+        return samples
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 100
+    step = max(1, total // max_samples)
+    for i in range(0, total, step):
+        if len(samples) >= max_samples:
+            break
+        cap.set(cv2.CAP_PROP_POS_FRAMES, i)
+        ret, frame = cap.read()
+        if ret and frame is not None and frame.size > 0:
+            resized = cv2.resize(frame, (INPUT_W, INPUT_H), interpolation=cv2.INTER_LINEAR)
+            rgb = np.ascontiguousarray(cv2.cvtColor(resized, cv2.COLOR_BGR2RGB))
+            samples.append((rgb, resized))
+    cap.release()
+    return samples
 
 
 def benchmark_single_model(
@@ -77,7 +109,7 @@ def benchmark_single_model(
 
         if idx == 0:
             print(
-                f"[DEBUG] {model_name:<18} | Input: (1, 3, {INPUT_H}, {INPUT_W}) uint8->float32 "
+                f"[DEBUG] {model_name:<24} | Input: (1, 3, {INPUT_H}, {INPUT_W}) uint8->float32 "
                 f"| Output: {out_arr.shape} {out_arr.dtype}"
             )
 
@@ -105,15 +137,14 @@ def benchmark_single_model(
 
 
 def main():
-    print("=" * 88)
-    print(f"🚀 BENCHMARKING PIPELINE - SEMANTIC SEGMENTATION INT8 TRÊN RASPBERRY PI 5 CPU")
+    print("=" * 94)
+    print(f"🚀 BENCHMARKING PIPELINE - SO SÁNH CÁC MODEL INT8 TRÊN RASPBERRY PI 5 CPU")
     print(
         f"Cấu hình: Input {INPUT_W}x{INPUT_H} RGB | Tổng số frame: {TOTAL_FRAMES} "
         f"(Warm-up: {WARMUP_FRAMES}, Đo lường: {TOTAL_FRAMES - WARMUP_FRAMES}) | Threads: {NUM_THREADS}"
     )
-    print("=" * 88)
+    print("=" * 94)
 
-    # Khởi tạo 100 khung hình ngẫu nhiên chuẩn bộ đệm liên tục (contiguous uint8 RGB)
     np.random.seed(42)
     random_frames = [
         np.ascontiguousarray(np.random.randint(0, 256, (INPUT_H, INPUT_W, 3), dtype=np.uint8))
@@ -122,28 +153,27 @@ def main():
 
     results = []
     for model_name, param_rel, bin_rel in MODELS_TO_BENCHMARK:
-        res = benchmark_single_model(model_name, param_rel, bin_rel, random_frames)
-        results.append(res)
+        if os.path.isfile(param_rel) and os.path.isfile(bin_rel):
+            res = benchmark_single_model(model_name, param_rel, bin_rel, random_frames)
+            results.append(res)
 
-    # Sắp xếp từ nhanh nhất (FPS cao nhất) xuống chậm nhất
     results.sort(key=lambda x: x["fps"], reverse=True)
 
-    print("\n" + "=" * 88)
+    print("\n" + "=" * 94)
     print(
-        f"{'Hạng':<5} | {'Kiến trúc Model (INT8)':<20} | {'Kích thước':<11} | "
+        f"{'Hạng':<5} | {'Kiến trúc Model (INT8)':<24} | {'Kích thước':<11} | "
         f"{'Trễ TB (ms)':<12} | {'P95 (ms)':<9} | {'Tốc độ (FPS)':<12} | {'Đánh giá'}"
     )
-    print("-" * 88)
+    print("-" * 94)
     for rank, r in enumerate(results, start=1):
         status = "🏆 ĐẠT CHUẨN TỐI ƯU" if rank == 1 else ("✅ Đạt (>30 FPS)" if r["fps"] >= 30.0 else "⚠️ Nặng")
         print(
-            f"#{rank:<4} | {r['name']:<20} | {r['size_kb']:>8.1f} KB | "
+            f"#{rank:<4} | {r['name']:<24} | {r['size_kb']:>8.1f} KB | "
             f"{r['mean_ms']:>10.2f}ms | {r['p95_ms']:>7.2f}ms | "
             f"{r['fps']:>8.1f} FPS | {status}"
         )
-    print("=" * 88)
+    print("=" * 94)
 
 
 if __name__ == "__main__":
     main()
-

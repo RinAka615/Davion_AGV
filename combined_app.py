@@ -243,6 +243,8 @@ class CombinedRobotApp(QMainWindow):
     def _load_best_yolo_model(self):
         models = [
             os.path.join(CURRENT_DIR, "models", "fast_scnn_int8.param"),
+            os.path.join(CURRENT_DIR, "models", "yolo_fastestv2_int8.param"),
+            os.path.join(CURRENT_DIR, "models", "picodet_int8.param"),
             os.path.join(CURRENT_DIR, "models", "model_int8.param"),
             os.path.join(CURRENT_DIR, "models", "nhamang_batden_seg.pt"),
             os.path.join(CURRENT_DIR, "models", "farm_path_bootstrap.pt"),
@@ -394,6 +396,8 @@ class CombinedRobotApp(QMainWindow):
         self.combo_model = QComboBox()
         self.combo_model.addItems([
             "fast_scnn_int8.param (Fast-SCNN INT8)",
+            "yolo_fastestv2_int8.param (YOLO-Fastest V2 INT8)",
+            "picodet_int8.param (PicoDet INT8)",
             "model_int8.param (MobileNetV3-UNet INT8)",
             "nhamang_batden_seg.pt (Bạt đen nhà màng - PyTorch)",
             "farm_path_bootstrap.pt",
@@ -1140,6 +1144,8 @@ class CombinedRobotApp(QMainWindow):
     def _on_model_combo_changed(self, idx: int):
         model_names = [
             "fast_scnn_int8.param",
+            "yolo_fastestv2_int8.param",
+            "picodet_int8.param",
             "model_int8.param",
             "nhamang_batden_seg.pt",
             "farm_path_bootstrap.pt",
