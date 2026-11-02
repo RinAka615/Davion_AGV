@@ -34,7 +34,7 @@ INPUT_W = 320
 INPUT_H = 320
 WARMUP_FRAMES = 10
 TOTAL_FRAMES = 100
-NUM_THREADS = 2
+NUM_THREADS = int(os.environ.get("OMP_NUM_THREADS", "3"))
 
 
 def load_real_eval_samples(max_samples: int = 20) -> List[Tuple[np.ndarray, np.ndarray]]:

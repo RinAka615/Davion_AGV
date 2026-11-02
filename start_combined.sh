@@ -51,11 +51,11 @@ if [ "$XDG_SESSION_TYPE" = "wayland" ] && [ -z "$QT_QPA_PLATFORM" ]; then
 fi
 export QT_LOGGING_RULES="*.warning=false"
 
-# Cấu hình số luồng CPU an toàn nguồn Pi 5
-export OMP_NUM_THREADS=${OMP_NUM_THREADS:-2}
-export MKL_NUM_THREADS=${MKL_NUM_THREADS:-2}
-export OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-2}
-export TORCH_NUM_THREADS=${TORCH_NUM_THREADS:-2}
+# Cấu hình số luồng CPU (Mặc định 3 luồng để tối ưu tốc độ & vẫn chừa 1 core cho Cam/QR/UART)
+export OMP_NUM_THREADS=${OMP_NUM_THREADS:-3}
+export MKL_NUM_THREADS=${MKL_NUM_THREADS:-3}
+export OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-3}
+export TORCH_NUM_THREADS=${TORCH_NUM_THREADS:-3}
 
 # 2. Xử lý tham số truyền vào hoặc chọn video mẫu nhà màng
 if [ $# -gt 0 ]; then
