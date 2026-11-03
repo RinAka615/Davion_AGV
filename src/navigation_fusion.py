@@ -269,8 +269,9 @@ class QRTurnMissionManager:
         path_seek_tolerance_px: float = 200.0,
         path_seek_max_angle_deg: float = 20.0,
         delay_turn1_sec: float = 1.0,
-        delay_turn2_sec: float = 1.0,
+        delay_turn2_sec: float = 3.0,
         confirm_frames: int = 2,
+        calib_turn2_stop_only: bool = True,
         **kwargs
     ):
         self.stop_duration_sec = stop_duration_sec
@@ -284,6 +285,7 @@ class QRTurnMissionManager:
         self.delay_turn2_sec = delay_turn2_sec
         self.confirm_frames = int(kwargs.get("confirm_frames", confirm_frames))
         self.min_path_confirm_frames = int(kwargs.get("min_path_confirm_frames", self.confirm_frames))
+        self.calib_turn2_stop_only = bool(kwargs.get("calib_turn2_stop_only", calib_turn2_stop_only))
 
         self.state = QRTurnMissionState.IDLE
         self.last_status_desc = "Sẵn sàng (Chờ tiếp cận mã TURN_1)"
@@ -645,16 +647,16 @@ class QRTurnMissionManager:
 
             dt = t_now - self.turn_right_start_time
 
-            # 1. Trong khoảng delay_turn2_sec đầu:
-            # Tạm dừng triệt tiêu quán tính tiến và bắt đầu xoay thoát khỏi khu vực trạm TURN_2.
+            # 1. Trong khoảng delay_turn2_sec (ví dụ 3.0s):
+            # STM32 xoay trái tại chỗ với cờ B4=3.
             # Hoàn toàn BỎ QUA dò tìm đường ban đầu để chống nhận nhầm vạch rác làm xe ủi bậy bạ!
             if dt < self.delay_turn2_sec:
                 self.consecutive_path_frames = 0
-                self.last_status_desc = f"⏸️ TRẠM TURN_2: TRỄ XOAY ({dt:.1f}/{self.delay_turn2_sec:.1f}s, B4=3) TRƯỚC KHI DÒ ĐƯỜNG..."
+                self.last_status_desc = f"🔄 [CALIB T2] ĐANG XOAY TRÁI ({dt:.1f}/{self.delay_turn2_sec:.1f}s, B4=3)..."
                 return FusedNavigationTarget(
                     target_pt=(cam_cx, h_img // 2),
                     lateral_offset_px=0.0,
-                    offset_direction=f"Trễ bắt đầu xoay TURN_2 ({dt:.1f}s)",
+                    offset_direction=f"Đang xoay T2 ({dt:.1f}/{self.delay_turn2_sec:.1f}s)",
                     is_qr_mode=False,
                     mode_name="TURNING_LEFT_SEEK_PATH",
                     active_qr=None,
@@ -665,7 +667,27 @@ class QRTurnMissionManager:
                     mission_status_desc=self.last_status_desc
                 )
 
-            # 2. Sau delay_turn2_sec: STM32 đang xoay trái tìm đường (cmd_r = +TURN_SPEED)
+            # 2. Sau khi đã xoay đủ delay_turn2_sec (ví dụ 3.0s):
+            # NẾU ĐANG BẬT CHẾ ĐỘ CALIB (calib_turn2_stop_only = True):
+            # DỪNG HẲN XE TUYỆT ĐỐI! KHÔNG BẮT LUỐNG, KHÔNG DÒ ĐƯỜNG, ĐỂ KIỂM TRA ĐẦU XE!
+            if getattr(self, "calib_turn2_stop_only", False):
+                self.state = QRTurnMissionState.COMPLETED_STOPPED
+                self.last_status_desc = f"🛑 [CALIB T2] ĐÃ XOAY XONG {self.delay_turn2_sec:.1f}S: DỪNG HẲN ĐỂ XEM ĐẦU ROBOT! (Bấm Reset để thử lại)"
+                return FusedNavigationTarget(
+                    target_pt=(cam_cx, h_img // 2),
+                    lateral_offset_px=0.0,
+                    offset_direction=f"Calib xong {self.delay_turn2_sec:.1f}s -> Dừng hẳn",
+                    is_qr_mode=False,
+                    mode_name="COMPLETED_STOPPED",
+                    active_qr=None,
+                    ref_y=h_img // 2,
+                    qr_stop_triggered=True,
+                    uart_flag_byte=1,  # 1 = Gửi lệnh dừng hẳn tuyệt đối cho STM32
+                    mission_state=self.state.value,
+                    mission_status_desc=self.last_status_desc
+                )
+
+            # 3. Sau delay_turn2_sec (chế độ chạy thường): STM32 đang xoay trái tìm đường (cmd_r = +TURN_SPEED)
             # CÁCH 3: Kiểm tra ĐỒNG THỜI cả Vị trí tâm luống (|offset| <= 200px) VÀ Góc nghiêng (|angle| <= 20 độ)
             has_path = False
             cur_offset: Optional[float] = None

@@ -342,7 +342,9 @@ def test_qr_turn_mission_lifecycle():
         stop_duration_sec=1.0,
         pause_center_sec=0.5,
         align_tolerance_px=40.0,
-        min_stop_qr_dim=200.0
+        min_stop_qr_dim=200.0,
+        delay_turn2_sec=1.0,
+        calib_turn2_stop_only=False
     )
 
     # 1. Ban đầu: Trạng thái IDLE
@@ -466,7 +468,9 @@ def test_method_3_path_seek_with_offset_and_heading_angle():
         align_tolerance_px=100.0,
         min_stop_qr_dim=200.0,
         path_seek_tolerance_px=200.0,
-        path_seek_max_angle_deg=20.0
+        path_seek_max_angle_deg=20.0,
+        delay_turn2_sec=1.0,
+        calib_turn2_stop_only=False
     )
 
     # Đưa mission vào trạng thái TURNING_RIGHT_SEEK_PATH (đang xoay trái tìm đường)
@@ -576,7 +580,8 @@ def test_turn_delays_and_confirm_frames():
         delay_turn2_sec=1.2,
         confirm_frames=3,
         align_tolerance_px=100.0,
-        min_stop_qr_dim=200.0
+        min_stop_qr_dim=200.0,
+        calib_turn2_stop_only=False
     )
 
     base_nav = FusedNavigationTarget(None, 0.0, '', False, 'IDLE', None, (0, 0), 0.0, 0, False, 0)
@@ -652,6 +657,42 @@ def test_turn_delays_and_confirm_frames():
     print("[PASS] test_turn_delays_and_confirm_frames: Delay Turn 1 (1.5s), Delay Turn 2 (1.2s), Confirm Frames (3 frames) 100% verified!")
 
 
+def test_calib_turn2_rotates_and_stops_completely():
+    """Kiểm tra chế độ Calib T2 (calib_turn2_stop_only=True):
+    - Khi tới trạm TURN_2: Bắt đầu xoay trái với B4=3.
+    - Trong 3.0s: Liên tục xoay trái (B4=3, offset=0.0).
+    - Hết 3.0s: DỪNG HẲN HOÀN TOÀN (B4=1, offset=0.0, COMPLETED_STOPPED), không dò đường, không bắt luống!
+    """
+    frame_shape = (720, 1280)
+    mission = QRTurnMissionManager(
+        delay_turn2_sec=3.0,
+        calib_turn2_stop_only=True
+    )
+    mission.state = QRTurnMissionState.APPROACHING_TURN2
+    base_nav = FusedNavigationTarget(None, 0.0, '', False, 'IDLE', None, (0, 0), 0.0, 0, False, 0)
+
+    # 1. Chạm trạm Turn 2 (>= 200px) tại now=10.0s
+    qr_turn2 = create_mock_qr(cx=640, cy=400, width=220, height=220, text="TURN_2")
+    res1 = mission.process(base_nav, [qr_turn2], frame_shape, now=10.0)
+    assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH
+    assert res1.uart_flag_byte == 3
+
+    # 2. Đang trong 3.0s xoay calib (now = 12.0s, dt = 2.0s < 3.0s): Tiếp tục xoay trái (B4=3)
+    res_spinning = mission.process(base_nav, [], frame_shape, now=12.0)
+    assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH
+    assert res_spinning.uart_flag_byte == 3
+
+    # 3. Hết 3.0s xoay calib (now = 13.0s, dt = 3.0s >= 3.0s):
+    # Dù có đường hay không, DỪNG HẲN (B4=1, COMPLETED_STOPPED) để người dùng kiểm tra đầu robot!
+    mock_path = create_mock_path_result(path_center_x=640, ref_y=500, offset_px=0.0)
+    res_stop = mission.process(base_nav, [], frame_shape, path_res=mock_path, now=13.0)
+    assert mission.state == QRTurnMissionState.COMPLETED_STOPPED, "Xoay xong 3s calib -> Phải dừng hẳn!"
+    assert res_stop.uart_flag_byte == 1, "Gửi B4=1 để dừng hẳn tuyệt đối trên STM32"
+    assert res_stop.lateral_offset_px == 0.0
+
+    print("[PASS] test_calib_turn2_rotates_and_stops_completely: 3.0s rotation -> Stop completely verified!")
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("RUNNING AUTOMATED TEST SUITE FOR NAVIGATION FUSION")
@@ -669,7 +710,8 @@ if __name__ == "__main__":
     test_method_3_path_seek_with_offset_and_heading_angle()
     test_turn2_detection_during_rotation_stops_and_approaches()
     test_turn_delays_and_confirm_frames()
+    test_calib_turn2_rotates_and_stops_completely()
     print("=" * 60)
-    print("ALL 13 NAVIGATION FUSION TESTS PASSED 100%!")
+    print("ALL 14 NAVIGATION FUSION TESTS PASSED 100%!")
     print("=" * 60)
 

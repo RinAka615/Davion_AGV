@@ -254,8 +254,9 @@ class CombinedRobotApp(QMainWindow):
             path_seek_tolerance_px=200.0,
             path_seek_max_angle_deg=20.0,
             delay_turn1_sec=1.0,
-            delay_turn2_sec=1.0,
-            confirm_frames=2
+            delay_turn2_sec=3.0,
+            confirm_frames=2,
+            calib_turn2_stop_only=True
         )
 
         self._init_ui()
@@ -648,8 +649,8 @@ class CombinedRobotApp(QMainWindow):
         lbl_delay_turn2 = QLabel("⏱️ Trễ T2:")
         lbl_delay_turn2.setStyleSheet("color: #a9b1d6; font-size: 11px;")
         self.spin_delay_turn2 = QDoubleSpinBox()
-        self.spin_delay_turn2.setRange(0.0, 5.0)
-        self.spin_delay_turn2.setValue(1.0)
+        self.spin_delay_turn2.setRange(0.0, 10.0)
+        self.spin_delay_turn2.setValue(3.0)
         self.spin_delay_turn2.setSingleStep(0.1)
         self.spin_delay_turn2.setSuffix(" s")
         self.spin_delay_turn2.valueChanged.connect(self._on_delay_turn2_changed)
@@ -671,6 +672,12 @@ class CombinedRobotApp(QMainWindow):
         row_mission_params_2.addWidget(self.spin_confirm_frames)
 
         grp_mission_layout.addLayout(row_mission_params_2)
+
+        self.chk_calib_turn2 = QCheckBox("🎯 Chế độ Calib T2 (Xoay xong dừng hẳn, không bắt luống)")
+        self.chk_calib_turn2.setChecked(True)
+        self.chk_calib_turn2.setStyleSheet("color: #ff9e64; font-weight: bold; font-size: 11px;")
+        self.chk_calib_turn2.stateChanged.connect(self._on_calib_turn2_changed)
+        grp_mission_layout.addWidget(self.chk_calib_turn2)
 
         self.btn_reset_mission = QPushButton("🔄 Reset Thủ Công (Dự phòng)")
         self.btn_reset_mission.setStyleSheet("""
@@ -1180,6 +1187,8 @@ class CombinedRobotApp(QMainWindow):
             if hasattr(self, "spin_confirm_frames"):
                 self.qr_mission.confirm_frames = int(self.spin_confirm_frames.value())
                 self.qr_mission.min_path_confirm_frames = int(self.spin_confirm_frames.value())
+            if hasattr(self, "chk_calib_turn2"):
+                self.qr_mission.calib_turn2_stop_only = self.chk_calib_turn2.isChecked()
             if self.qr_mission.state == QRTurnMissionState.TURNING_LEFT_SEEK_TURN2:
                 if hasattr(self, "qr_detector") and hasattr(self.qr_detector, "last_decoded_text"):
                     if self.qr_detector.last_decoded_text and "TURN_1" in self.qr_detector.last_decoded_text.upper():
@@ -1612,6 +1621,10 @@ class CombinedRobotApp(QMainWindow):
         if hasattr(self, "qr_mission") and self.qr_mission:
             self.qr_mission.confirm_frames = int(val)
             self.qr_mission.min_path_confirm_frames = int(val)
+
+    def _on_calib_turn2_changed(self, state: int):
+        if hasattr(self, "qr_mission") and self.qr_mission:
+            self.qr_mission.calib_turn2_stop_only = bool(state == Qt.Checked)
 
     def _step_forward(self):
         if not self.cap or self.is_camera:
