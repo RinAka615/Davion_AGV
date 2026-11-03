@@ -43,7 +43,8 @@ from PyQt5.QtWidgets import (
     QLabel, QPushButton, QSlider, QCheckBox, QFileDialog, QMessageBox,
     QGroupBox, QFrame, QSplitter, QTableWidget, QTableWidgetItem,
     QHeaderView, QTextEdit, QStatusBar, QComboBox, QDoubleSpinBox,
-    QSpinBox, QTabWidget, QProgressBar, QScrollArea, QGridLayout
+    QSpinBox, QTabWidget, QProgressBar, QScrollArea, QGridLayout,
+    QRadioButton, QButtonGroup
 )
 
 # Thêm thư mục hiện tại vào sys.path
@@ -254,10 +255,11 @@ class CombinedRobotApp(QMainWindow):
             path_seek_tolerance_px=200.0,
             path_seek_max_angle_deg=20.0,
             delay_turn1_sec=1.0,
-            delay_turn2_sec=0.3,
+            delay_turn2_sec=3.0,
             confirm_frames=1,
             calib_turn2_stop_only=False,
-            path_min_area=30000.0,
+            turn2_seek_mode="area",
+            path_min_area=100000.0,
             path_min_height=0.0
         )
 
@@ -658,7 +660,7 @@ class CombinedRobotApp(QMainWindow):
         lbl_delay_turn2.setStyleSheet("color: #a9b1d6; font-size: 11px;")
         self.spin_delay_turn2 = QDoubleSpinBox()
         self.spin_delay_turn2.setRange(0.0, 10.0)
-        self.spin_delay_turn2.setValue(0.3)
+        self.spin_delay_turn2.setValue(3.0)
         self.spin_delay_turn2.setSingleStep(0.1)
         self.spin_delay_turn2.setSuffix(" s")
         self.spin_delay_turn2.valueChanged.connect(self._on_delay_turn2_changed)
@@ -681,6 +683,27 @@ class CombinedRobotApp(QMainWindow):
 
         grp_mission_layout.addLayout(row_mission_params_2)
 
+        # Hàng 2.5: Chế độ tìm luống sau TURN 2 (Dò theo Diện tích vs Dùng trễ)
+        row_seek_mode = QHBoxLayout()
+        row_seek_mode.setSpacing(8)
+        lbl_mode_title = QLabel("🧭 Mode T2:")
+        lbl_mode_title.setStyleSheet("color: #7aa2f7; font-weight: bold; font-size: 11px;")
+        self.rb_seek_area = QRadioButton("📐 Dò Luống (≥ 100k px²)")
+        self.rb_seek_delay = QRadioButton("⏱️ Dùng Trễ T2")
+        self.rb_seek_area.setChecked(True)
+        self.rb_seek_area.setStyleSheet("color: #73daca; font-weight: bold; font-size: 11px;")
+        self.rb_seek_delay.setStyleSheet("color: #bb9af7; font-weight: bold; font-size: 11px;")
+
+        self.bg_seek_mode = QButtonGroup(self)
+        self.bg_seek_mode.addButton(self.rb_seek_area, 1)
+        self.bg_seek_mode.addButton(self.rb_seek_delay, 2)
+        self.bg_seek_mode.buttonClicked.connect(self._on_seek_mode_changed)
+
+        row_seek_mode.addWidget(lbl_mode_title)
+        row_seek_mode.addWidget(self.rb_seek_area)
+        row_seek_mode.addWidget(self.rb_seek_delay)
+        grp_mission_layout.addLayout(row_seek_mode)
+
         # Hàng 3: Điều kiện lọc Luống Thật theo Diện tích tối thiểu (Pixel^2)
         row_mission_params_3 = QHBoxLayout()
         row_mission_params_3.setSpacing(6)
@@ -688,9 +711,9 @@ class CombinedRobotApp(QMainWindow):
         lbl_min_area = QLabel("📐 Min Area Luống:")
         lbl_min_area.setStyleSheet("color: #a9b1d6; font-size: 11px;")
         self.spin_path_min_area = QSpinBox()
-        self.spin_path_min_area.setRange(0, 300000)
-        self.spin_path_min_area.setValue(30000)
-        self.spin_path_min_area.setSingleStep(5000)
+        self.spin_path_min_area.setRange(0, 500000)
+        self.spin_path_min_area.setValue(100000)
+        self.spin_path_min_area.setSingleStep(10000)
         self.spin_path_min_area.setSuffix(" px²")
         self.spin_path_min_area.valueChanged.connect(self._on_path_min_area_changed)
 
@@ -1216,6 +1239,8 @@ class CombinedRobotApp(QMainWindow):
                 self.qr_mission.min_path_confirm_frames = int(self.spin_confirm_frames.value())
             if hasattr(self, "chk_calib_turn2"):
                 self.qr_mission.calib_turn2_stop_only = self.chk_calib_turn2.isChecked()
+            if hasattr(self, "rb_seek_area"):
+                self.qr_mission.turn2_seek_mode = "area" if self.rb_seek_area.isChecked() else "delay"
             if hasattr(self, "spin_path_min_area"):
                 self.qr_mission.path_min_area = float(self.spin_path_min_area.value())
             if hasattr(self, "spin_path_min_height"):
@@ -1703,6 +1728,11 @@ class CombinedRobotApp(QMainWindow):
     def _on_calib_turn2_changed(self, state: int):
         if hasattr(self, "qr_mission") and self.qr_mission:
             self.qr_mission.calib_turn2_stop_only = bool(state == Qt.Checked)
+
+    def _on_seek_mode_changed(self):
+        if hasattr(self, "qr_mission") and self.qr_mission:
+            mode = "area" if (hasattr(self, "rb_seek_area") and self.rb_seek_area.isChecked()) else "delay"
+            self.qr_mission.turn2_seek_mode = mode
 
     def _on_path_min_area_changed(self, val: int):
         if hasattr(self, "qr_mission") and self.qr_mission:

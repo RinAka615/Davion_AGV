@@ -59,9 +59,9 @@ def create_mock_path_result(
     path_center_x: int = 320,
     ref_y: int = 400,
     offset_px: float = 0.0,
-    bounding_box: Optional[Tuple[int, int, int, int]] = (100, 200, 300, 300)
+    bounding_box: Optional[Tuple[int, int, int, int]] = (100, 200, 350, 300)
 ) -> DetectionResult:
-    """Tạo đối tượng DetectionResult giả lập cho bám đường (Path Tracking)."""
+    """Tạo đối tượng DetectionResult giả lập cho bám đường (Path Tracking). S = 350*300 = 105,000 px²."""
     return DetectionResult(
         state=TrackingState.TRACKING,
         confidence=85.0,
@@ -586,7 +586,8 @@ def test_turn_delays_and_confirm_frames():
         confirm_frames=3,
         align_tolerance_px=100.0,
         min_stop_qr_dim=200.0,
-        calib_turn2_stop_only=False
+        calib_turn2_stop_only=False,
+        turn2_seek_mode="delay"
     )
 
     base_nav = FusedNavigationTarget(None, 0.0, '', False, 'IDLE', None, (0, 0), 0.0, 0, False, 0)
@@ -760,8 +761,9 @@ def test_path_detection_by_min_area_and_height():
         delay_turn2_sec=0.0,  # Không cần trễ thời gian!
         confirm_frames=1,
         calib_turn2_stop_only=False,
-        path_min_area=30000.0,
-        path_min_height=150.0
+        turn2_seek_mode="area",
+        path_min_area=100000.0,
+        path_min_height=0.0
     )
     base_nav = FusedNavigationTarget(None, 0.0, '', False, 'IDLE', None, (0, 0), 0.0, 0, False, 0)
 
