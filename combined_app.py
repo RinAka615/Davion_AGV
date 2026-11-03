@@ -252,7 +252,10 @@ class CombinedRobotApp(QMainWindow):
             min_stop_qr_dim=200.0,
             auto_reset_delay_sec=3.0,
             path_seek_tolerance_px=200.0,
-            path_seek_max_angle_deg=20.0
+            path_seek_max_angle_deg=20.0,
+            delay_turn1_sec=1.0,
+            delay_turn2_sec=1.0,
+            confirm_frames=2
         )
 
         self._init_ui()
@@ -628,6 +631,46 @@ class CombinedRobotApp(QMainWindow):
         row_mission_params.addWidget(self.spin_auto_reset)
 
         grp_mission_layout.addLayout(row_mission_params)
+
+        # Hàng 2: Trễ xoay Turn 1, Trễ xoay Turn 2, Số frame xác nhận (Debounce)
+        row_mission_params_2 = QHBoxLayout()
+        row_mission_params_2.setSpacing(6)
+
+        lbl_delay_turn1 = QLabel("⏱️ Trễ T1:")
+        lbl_delay_turn1.setStyleSheet("color: #a9b1d6; font-size: 11px;")
+        self.spin_delay_turn1 = QDoubleSpinBox()
+        self.spin_delay_turn1.setRange(0.0, 5.0)
+        self.spin_delay_turn1.setValue(1.0)
+        self.spin_delay_turn1.setSingleStep(0.1)
+        self.spin_delay_turn1.setSuffix(" s")
+        self.spin_delay_turn1.valueChanged.connect(self._on_delay_turn1_changed)
+
+        lbl_delay_turn2 = QLabel("⏱️ Trễ T2:")
+        lbl_delay_turn2.setStyleSheet("color: #a9b1d6; font-size: 11px;")
+        self.spin_delay_turn2 = QDoubleSpinBox()
+        self.spin_delay_turn2.setRange(0.0, 5.0)
+        self.spin_delay_turn2.setValue(1.0)
+        self.spin_delay_turn2.setSingleStep(0.1)
+        self.spin_delay_turn2.setSuffix(" s")
+        self.spin_delay_turn2.valueChanged.connect(self._on_delay_turn2_changed)
+
+        lbl_confirm_frames = QLabel("🎯 Frame:")
+        lbl_confirm_frames.setStyleSheet("color: #a9b1d6; font-size: 11px;")
+        self.spin_confirm_frames = QSpinBox()
+        self.spin_confirm_frames.setRange(1, 10)
+        self.spin_confirm_frames.setValue(2)
+        self.spin_confirm_frames.setSingleStep(1)
+        self.spin_confirm_frames.setSuffix(" f")
+        self.spin_confirm_frames.valueChanged.connect(self._on_confirm_frames_changed)
+
+        row_mission_params_2.addWidget(lbl_delay_turn1)
+        row_mission_params_2.addWidget(self.spin_delay_turn1)
+        row_mission_params_2.addWidget(lbl_delay_turn2)
+        row_mission_params_2.addWidget(self.spin_delay_turn2)
+        row_mission_params_2.addWidget(lbl_confirm_frames)
+        row_mission_params_2.addWidget(self.spin_confirm_frames)
+
+        grp_mission_layout.addLayout(row_mission_params_2)
 
         self.btn_reset_mission = QPushButton("🔄 Reset Thủ Công (Dự phòng)")
         self.btn_reset_mission.setStyleSheet("""
@@ -1130,6 +1173,13 @@ class CombinedRobotApp(QMainWindow):
                 self.qr_mission.path_seek_tolerance_px = float(self.spin_path_seek_tol.value())
             if hasattr(self, "spin_path_seek_angle"):
                 self.qr_mission.path_seek_max_angle_deg = float(self.spin_path_seek_angle.value())
+            if hasattr(self, "spin_delay_turn1"):
+                self.qr_mission.delay_turn1_sec = float(self.spin_delay_turn1.value())
+            if hasattr(self, "spin_delay_turn2"):
+                self.qr_mission.delay_turn2_sec = float(self.spin_delay_turn2.value())
+            if hasattr(self, "spin_confirm_frames"):
+                self.qr_mission.confirm_frames = int(self.spin_confirm_frames.value())
+                self.qr_mission.min_path_confirm_frames = int(self.spin_confirm_frames.value())
             if self.qr_mission.state == QRTurnMissionState.TURNING_LEFT_SEEK_TURN2:
                 if hasattr(self, "qr_detector") and hasattr(self.qr_detector, "last_decoded_text"):
                     if self.qr_detector.last_decoded_text and "TURN_1" in self.qr_detector.last_decoded_text.upper():
@@ -1549,6 +1599,19 @@ class CombinedRobotApp(QMainWindow):
         if hasattr(self, "qr_mission") and self.qr_mission:
             self.qr_mission.path_seek_max_angle_deg = float(val)
         self._reprocess_current_frame()
+
+    def _on_delay_turn1_changed(self, val: float):
+        if hasattr(self, "qr_mission") and self.qr_mission:
+            self.qr_mission.delay_turn1_sec = float(val)
+
+    def _on_delay_turn2_changed(self, val: float):
+        if hasattr(self, "qr_mission") and self.qr_mission:
+            self.qr_mission.delay_turn2_sec = float(val)
+
+    def _on_confirm_frames_changed(self, val: int):
+        if hasattr(self, "qr_mission") and self.qr_mission:
+            self.qr_mission.confirm_frames = int(val)
+            self.qr_mission.min_path_confirm_frames = int(val)
 
     def _step_forward(self):
         if not self.cap or self.is_camera:
