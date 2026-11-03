@@ -663,7 +663,9 @@ def test_calib_turn2_rotates_and_stops_completely():
     """Kiểm tra chế độ Calib T2 (calib_turn2_stop_only=True):
     - Khi tới trạm TURN_2: Bắt đầu xoay trái với B4=3.
     - Trong 3.0s: Liên tục xoay trái (B4=3, offset=0.0).
-    - Hết 3.0s: DỪNG HẲN HOÀN TOÀN (B4=2, offset=0.0, COMPLETED_STOPPED), không dò đường, không bắt luống!
+    - Hết 3.0s: DỪNG HẲN HOÀN TOÀN:
+      + 0.5s đầu gửi B4=0 để STM32 ngắt lệnh xoay Step 7 và hãm phanh triệt tiêu quán tính.
+      + Sau 0.5s gửi B4=1 (offset=0.0) để giữ xe đứng yên tuyệt đối, không dò đường, không bám luống!
     """
     frame_shape = (720, 1280)
     mission = QRTurnMissionManager(
@@ -685,12 +687,19 @@ def test_calib_turn2_rotates_and_stops_completely():
     assert res_spinning.uart_flag_byte == 3
 
     # 3. Hết 3.0s xoay calib (now = 13.0s, dt = 3.0s >= 3.0s):
-    # Dù có đường hay không, DỪNG HẲN (B4=2, COMPLETED_STOPPED) để người dùng kiểm tra đầu robot!
+    # Dù có đường hay không, DỪNG HẲN: Gửi B4=0 để STM32 dừng xoay ngay lập tức!
     mock_path = create_mock_path_result(path_center_x=640, ref_y=500, offset_px=0.0)
     res_stop = mission.process(base_nav, [], frame_shape, path_res=mock_path, now=13.0)
-    assert mission.state == QRTurnMissionState.COMPLETED_STOPPED, "Xoay xong 3s calib -> Phải dừng hẳn!"
-    assert res_stop.uart_flag_byte == 2, "Gửi B4=2 để dừng hẳn tuyệt đối trên STM32 (triệt tiêu quán tính / phanh dừng)"
+    assert mission.state == QRTurnMissionState.COMPLETED_STOPPED, "Xoay xong 3s calib -> Phải chuyển sang COMPLETED_STOPPED!"
+    assert res_stop.uart_flag_byte == 0, "Bắt buộc gửi B4=0 để STM32 ngắt cờ xoay Bước 7 ngay lập tức!"
     assert res_stop.lateral_offset_px == 0.0
+
+    # 4. Sau 0.5s dừng triệt tiêu quán tính (now = 13.6s, dt_stop = 0.6s >= 0.5s):
+    # Gửi B4=1 (Lệnh dừng tuyệt đối) với offset=0.0 để xe đứng yên hoàn toàn!
+    res_hold = mission.process(base_nav, [], frame_shape, path_res=mock_path, now=13.6)
+    assert mission.state == QRTurnMissionState.COMPLETED_STOPPED
+    assert res_hold.uart_flag_byte == 1, "Sau 0.5s gửi B4=1 để STM32 khóa phanh đứng yên tuyệt đối"
+    assert res_hold.lateral_offset_px == 0.0
 
     print("[PASS] test_calib_turn2_rotates_and_stops_completely: 3.0s rotation -> Stop completely verified!")
 
@@ -699,7 +708,7 @@ def test_idle_direct_turn2_station_trigger():
     """Kiểm tra tính năng kích hoạt trực tiếp trạm TURN_2 từ trạng thái IDLE:
     - Khi đặt robot trực tiếp trước mã TURN_2 (>= 200px) để test calib
     - Hệ thống chuyển ngay sang TURNING_RIGHT_SEEK_PATH (B4=3)
-    - Xoay đúng 3.0s rồi DỪNG HẲN HOÀN TOÀN (B4=2, offset=0.0)
+    - Xoay đúng 3.0s rồi DỪNG HẲN HOÀN TOÀN (B4=0 rồi B4=1, offset=0.0)
     """
     frame_shape = (720, 1280)
     mission = QRTurnMissionManager(
@@ -720,11 +729,16 @@ def test_idle_direct_turn2_station_trigger():
     assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH
     assert res_mid.uart_flag_byte == 3
 
-    # Hết 3.0s (now = 3.0s) -> Dừng hẳn (B4=2, offset=0.0)
+    # Hết 3.0s (now = 3.0s) -> Chuyển sang COMPLETED_STOPPED, gửi B4=0 ngắt xoay
     res_end = mission.process(base_nav, [], frame_shape, now=3.0)
     assert mission.state == QRTurnMissionState.COMPLETED_STOPPED
-    assert res_end.uart_flag_byte == 2, "Hết 3s phải gửi B4=2 để dừng hẳn STM32"
+    assert res_end.uart_flag_byte == 0, "Hết 3s phải gửi B4=0 để STM32 ngắt xoay"
     assert res_end.lateral_offset_px == 0.0
+
+    # Sau 0.5s (now = 3.6s) -> Gửi B4=1 khóa phanh
+    res_hold = mission.process(base_nav, [], frame_shape, now=3.6)
+    assert res_hold.uart_flag_byte == 1, "Sau 0.5s gửi B4=1 để khóa phanh"
+    assert res_hold.lateral_offset_px == 0.0
 
     print("[PASS] test_idle_direct_turn2_station_trigger: Direct TURN_2 trigger in IDLE -> 3.0s turn -> Stop completely verified!")
 

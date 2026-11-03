@@ -701,17 +701,18 @@ class QRTurnMissionManager:
             # DỪNG HẲN XE TUYỆT ĐỐI! KHÔNG BẮT LUỐNG, KHÔNG DÒ ĐƯỜNG, ĐỂ KIỂM TRA ĐẦU XE!
             if getattr(self, "calib_turn2_stop_only", False):
                 self.state = QRTurnMissionState.COMPLETED_STOPPED
-                self.last_status_desc = f"🛑 [CALIB T2] ĐÃ XOAY XONG {self.delay_turn2_sec:.1f}S: DỪNG HẲN ĐỂ XEM ĐẦU ROBOT! (B4=2, Bấm Reset để thử lại)"
+                self.completed_time = t_now
+                self.last_status_desc = f"🛑 [CALIB T2] ĐÃ XOAY XONG {self.delay_turn2_sec:.1f}S: DỪNG HẲN (B4=0 ➔ B4=1)! (Bấm Reset để thử lại)"
                 return FusedNavigationTarget(
                     target_pt=(cam_cx, h_img // 2),
                     lateral_offset_px=0.0,
-                    offset_direction=f"Calib xong {self.delay_turn2_sec:.1f}s -> Dừng hẳn (B4=2)",
+                    offset_direction=f"Calib xong {self.delay_turn2_sec:.1f}s -> Dừng hẳn (B4=0)",
                     is_qr_mode=False,
                     mode_name="COMPLETED_STOPPED",
                     active_qr=None,
                     ref_y=h_img // 2,
                     qr_stop_triggered=True,
-                    uart_flag_byte=2,  # 2 = Gửi lệnh dừng hẳn xe tuyệt đối (triệt tiêu quán tính quay) cho STM32
+                    uart_flag_byte=0,  # 0 = Bắt buộc gửi Byte 4 = 0 để STM32 ngắt cờ xoay (Step 7) và dừng động cơ ngay lập tức!
                     mission_state=self.state.value,
                     mission_status_desc=self.last_status_desc
                 )
@@ -780,6 +781,27 @@ class QRTurnMissionManager:
                     mission_status_desc=self.last_status_desc
                 )
             else:
+                # Failsafe Timeout: Sau khi đã xoay thêm quá 3.5s mà chưa thỏa mãn cả góc lẫn tâm,
+                # nếu camera thấy bất kỳ luống nào (hoặc quá 5.0s timeout), lập tức dừng xoay (B4=0) và bám đường để tránh xoay tít mù!
+                dt_seek = dt - self.delay_turn2_sec
+                if dt_seek >= 5.0 or (dt_seek >= 3.5 and path_res is not None and path_res.state == TrackingState.TRACKING):
+                    self.reset()
+                    self.last_status_desc = f"⚠️ HẾT TIMEOUT XOAY ({dt_seek:.1f}s): DỪNG XOAY VÀ CHUYỂN SANG BÁM LUỐNG MỚI (B4=0)"
+                    lat_off = path_res.lateral_offset_px if (path_res and path_res.lateral_offset_px is not None) else 0.0
+                    return FusedNavigationTarget(
+                        target_pt=path_res.path_center if (path_res and path_res.path_center) else (cam_cx, h_img // 2),
+                        lateral_offset_px=lat_off,
+                        offset_direction="Timeout xoay -> Chuyển bám luống (B4=0)",
+                        is_qr_mode=False,
+                        mode_name="PATH_LINE",
+                        active_qr=None,
+                        ref_y=h_img // 2,
+                        qr_stop_triggered=False,
+                        uart_flag_byte=0,
+                        mission_state=self.state.value,
+                        mission_status_desc=self.last_status_desc
+                    )
+
                 # Chưa thỏa mãn điều kiện (chưa thấy luống HOẶC lệch > 200px HOẶC góc chéo > 20 độ)
                 # -> Tiếp tục xoay trái tìm đường (Gửi B4 = 3)
                 if cur_offset is not None:
@@ -811,21 +833,22 @@ class QRTurnMissionManager:
             if self.completed_time is None:
                 self.completed_time = t_now
 
-            target_pt = (cam_cx, h_img // 2)
-            lat_off = 0.0
-            off_dir = "Dừng hẳn"
+            dt_stop = t_now - self.completed_time
+            # Trong 0.5s đầu: Gửi B4=0 để STM32 nhận diện thoát xoay Bước 7 và dừng quay
+            # Sau 0.5s: Gửi B4=1 (lệnh dừng tuyệt đối) với lateral_offset_px = 0.0 để xe đứng yên hoàn toàn không bám luống
+            flag_stop = 0 if dt_stop < 0.5 else 1
 
-            self.last_status_desc = "🛑 ĐÃ HOÀN THÀNH NHIỆM VỤ: DỪNG HẲN (B4=2, KHÔNG CHẠY BÁM ĐƯỜNG LẠI)"
+            self.last_status_desc = f"🛑 [CALIB T2] ĐÃ XOAY XONG {self.delay_turn2_sec:.1f}S: DỪNG HẲN ĐỂ XEM ĐẦU ROBOT (B4={flag_stop})"
             return FusedNavigationTarget(
-                target_pt=target_pt,
+                target_pt=(cam_cx, h_img // 2),
                 lateral_offset_px=0.0,
-                offset_direction="Dừng hoàn tất (B4=2)",
+                offset_direction=f"Calib dừng hoàn tất (B4={flag_stop})",
                 is_qr_mode=False,
                 mode_name="COMPLETED_STOPPED",
                 active_qr=None,
                 ref_y=h_img // 2,
                 qr_stop_triggered=True,
-                uart_flag_byte=2,  # 2 = Giữ lệnh dừng hẳn tuyệt đối trên STM32 (triệt tiêu toàn bộ đà xoay & tiến)
+                uart_flag_byte=flag_stop,
                 mission_state=self.state.value,
                 mission_status_desc=self.last_status_desc
             )

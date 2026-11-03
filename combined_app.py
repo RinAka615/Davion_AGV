@@ -1249,7 +1249,7 @@ class CombinedRobotApp(QMainWindow):
             self.lbl_active_nav_source.setStyleSheet("color: #bb9af7; font-size: 13px; font-weight: bold;")
             
             if fused_nav.mission_state == QRTurnMissionState.COMPLETED_STOPPED.value:
-                self.lbl_fusion_status.setText(f"🛑 HOÀN TẤT ĐẾN TRẠM TURN_2 [BYTE 4 = 2] ({fused_nav.offset_direction})")
+                self.lbl_fusion_status.setText(f"🛑 CALIB T2: ĐÃ DỪNG HẲN [BYTE 4 = {fused_nav.uart_flag_byte}] ({fused_nav.offset_direction})")
                 self.lbl_fusion_status.setStyleSheet("color: #00E676; font-size: 12px; font-weight: bold;")
             elif fused_nav.mission_state == QRTurnMissionState.APPROACHING_TURN2.value:
                 if fused_nav.uart_flag_byte == 2:
@@ -1281,7 +1281,7 @@ class CombinedRobotApp(QMainWindow):
 
             # Tính toán hướng lái đề xuất
             if fused_nav.mission_state == QRTurnMissionState.COMPLETED_STOPPED.value:
-                self.lbl_steering_action.setText("🛑 LỆNH LÁI: DỪNG HOÀN TẤT [B4=2] (Đã xoay xong để kiểm tra đầu xe)")
+                self.lbl_steering_action.setText(f"🛑 LỆNH LÁI: DỪNG HOÀN TẤT [B4={fused_nav.uart_flag_byte}] (Đã xoay {self.qr_mission.delay_turn2_sec:.1f}s để kiểm tra đầu xe)")
                 self.lbl_steering_action.setStyleSheet("color: #00E676; font-weight: bold; font-size: 13px;")
             elif fused_nav.mission_state == QRTurnMissionState.APPROACHING_TURN2.value:
                 if fused_nav.uart_flag_byte == 2:
@@ -1373,9 +1373,27 @@ class CombinedRobotApp(QMainWindow):
             )
             pkt_txt = self.uart.last_sent_packet or ""
             if hasattr(self, "lbl_uart_info"):
-                flag_str_map = {0: "0 (TIẾN)", 1: "1 (TRẠM DỪNG)", 2: "2 (TÂM DỪNG 500MS)"}
+                flag_str_map = {
+                    0: "0 (TIẾN / DỪNG XOAY)",
+                    1: "1 (TRẠM DỪNG / KHÓA PHANH)",
+                    2: "2 (TÂM DỪNG 500MS)",
+                    3: "3 (XOAY TRÁI T2)"
+                }
                 flag_str = flag_str_map.get(flag_val, f"{flag_val}")
                 self.lbl_uart_info.setText(f"UART [B4={flag_str}]: {pkt_txt.strip()[:24]}")
+
+            # Tự động ngắt UART khi hoàn tất xoay Calib T2 để đảm bảo xe đứng yên tuyệt đối không trôi:
+            if (fused_nav.mission_state == QRTurnMissionState.COMPLETED_STOPPED.value
+                    and hasattr(self, "chk_calib_turn2") and self.chk_calib_turn2.isChecked()
+                    and hasattr(self, "uart") and self.uart and self.uart.is_enabled):
+                t_comp = getattr(self.qr_mission, "completed_time", None)
+                if t_comp is not None and (time.time() - t_comp) >= 0.8:
+                    self._calib_auto_stopped_uart = True
+                    self._set_uart_enabled(False)
+                    self.statusBar().showMessage(
+                        f"🛑 [CALIB T2] ĐÃ XOAY XONG {self.qr_mission.delay_turn2_sec:.1f}S: ĐÃ DỪNG HẲN & TỰ ĐỘNG KHÓA UART! BẤM 'RESET THỦ CÔNG' ĐỂ THỬ LẠI",
+                        10000
+                    )
 
         # 3.4 Vẽ mã QR trực quan
         vis_frame = self.qr_visualizer.draw_results(vis_frame, qr_results)
@@ -1392,9 +1410,9 @@ class CombinedRobotApp(QMainWindow):
         qr_count = len([r for r in qr_results if r.is_decoded])
         qr_stat_short = f"QR: {qr_count} mã"
         stop_badge_map = {
-            0: "⚪ B4=0 (CHẠY)",
-            1: "🛑 B4=1 (TRẠM TURN_1)",
-            2: "⏸️ B4=2 (DỪNG QUÁN TÍNH / DỪNG HẲN)",
+            0: "⚪ B4=0 (CHẠY / DỪNG XOAY)",
+            1: "🛑 B4=1 (TRẠM TURN_1 / DỪNG HẲN)",
+            2: "⏸️ B4=2 (DỪNG QUÁN TÍNH)",
             3: "↩️ B4=3 (XOAY TRÁI TÌM ĐƯỜNG)"
         }
         stop_badge = stop_badge_map.get(fused_nav.uart_flag_byte, f"B4={fused_nav.uart_flag_byte}")
@@ -1585,8 +1603,11 @@ class CombinedRobotApp(QMainWindow):
             self.qr_mission.reset()
         if hasattr(self, "qr_detector") and hasattr(self.qr_detector, "reset_last_decoded_text"):
             self.qr_detector.reset_last_decoded_text("TURN_2")
+        if getattr(self, "_calib_auto_stopped_uart", False):
+            self._calib_auto_stopped_uart = False
+            self._set_uart_enabled(True)
         if hasattr(self, "lbl_mission_status"):
-            self.lbl_mission_status.setText("Nhiệm vụ QR: Đã reset (Chờ tiếp cận mã TURN_1)")
+            self.lbl_mission_status.setText("Nhiệm vụ QR: Đã reset (Chờ tiếp cận mã TURN_1 hoặc TURN_2)")
             self.lbl_mission_status.setStyleSheet("color: #7dcfff; font-size: 12px; font-weight: bold;")
         self.statusBar().showMessage("🔄 Đã reset nhiệm vụ chuyển hướng QR (Turn 1 -> Turn 2)", 3000)
 
