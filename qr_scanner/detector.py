@@ -92,9 +92,8 @@ class QRDetector:
         if self.backend in ("auto", "zxing") and HAS_ZXING:
             results = self._detect_zxing(frame, target_formats=target_formats, confidence=confidence)
 
-        # Nếu backend là "opencv" hoặc nếu zxing không tìm thấy mã nào và mode là "auto",
-        # thử bổ sung bằng OpenCV QRCodeDetector
-        if not results and self.backend in ("auto", "opencv"):
+        # Chỉ dùng OpenCV QRCodeDetector nếu backend chỉ định là "opencv" hoặc máy không cài thư viện ZXing-C++
+        if not results and (self.backend == "opencv" or not HAS_ZXING):
             results = self._detect_opencv(frame)
 
         # Lưu lại nội dung mã QR giải mã thành công gần nhất

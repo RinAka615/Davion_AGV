@@ -1038,11 +1038,28 @@ class CombinedRobotApp(QMainWindow):
         qr_conf = self.slider_qr_conf.value() / 100.0
         self.qr_detector.enable_dewarp = self.chk_qr_dewarp.isChecked()
 
-        # Quét liên tục mỗi frame + kết hợp vùng QR do AI (YOLO-Fastest V2) phát hiện khi đang quay nhòe
+        # Tối ưu hóa nhịp quét thông minh để giữ FPS cao 35-50 FPS trên CPU Pi 5:
+        # - Nếu AI YOLO phát hiện có hộp QR (khi đang quay/tiếp cận) HOẶC đang bám mã QR: Quét liên tục 100% mỗi frame.
+        # - Nếu không có mã QR: Quét xen kẽ mỗi 2 frame để giữ FPS mượt mà 45-50 FPS.
+        if not hasattr(self, "_qr_frame_count"):
+            self._qr_frame_count = 0
+            self._cached_qr_results = []
+        self._qr_frame_count += 1
+
         ai_qr_boxes = getattr(yolo_res, "qr_boxes", None) if yolo_res is not None else None
-        qr_results = self.qr_detector.detect_and_decode(frame, confidence=qr_conf, ai_qr_boxes=ai_qr_boxes)
-        if not self.chk_qr_candidates.isChecked():
-            qr_results = [r for r in qr_results if r.is_decoded]
+        should_scan_qr = (
+            bool(ai_qr_boxes and len(ai_qr_boxes) > 0) or
+            bool(len(self._cached_qr_results) > 0) or
+            (self._qr_frame_count % 2 == 0)
+        )
+
+        if should_scan_qr:
+            qr_results = self.qr_detector.detect_and_decode(frame, confidence=qr_conf, ai_qr_boxes=ai_qr_boxes)
+            if not self.chk_qr_candidates.isChecked():
+                qr_results = [r for r in qr_results if r.is_decoded]
+            self._cached_qr_results = qr_results
+        else:
+            qr_results = self._cached_qr_results
 
         elapsed_ms = (time.time() - t0) * 1000.0
         fps_current = 1000.0 / elapsed_ms if elapsed_ms > 0 else 0.0
