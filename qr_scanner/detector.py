@@ -112,11 +112,11 @@ class QRDetector:
                 if any(abs(cx_box - dc[0]) < 60 and abs(cy_box - dc[1]) < 60 for dc in decoded_centers):
                     continue
 
-                # Kiểm tra tỷ lệ khung hình gần vuông của bảng mã QR (0.58 <= w/h <= 1.55)
+                # Kiểm tra tỷ lệ khung hình bảng mã QR (hỗ trợ kéo vệt ngang khi quay nhanh: 0.45 <= w/h <= 2.2)
                 bw_box = max(1, x2 - x1)
                 bh_box = max(1, y2 - y1)
                 ar_box = float(bw_box) / float(bh_box)
-                if ar_box < 0.58 or ar_box > 1.55 or bh_box < 52:
+                if ar_box < 0.45 or ar_box > 2.2 or bh_box < 38:
                     continue
 
                 # Cắt vùng ROI mở rộng 15px để khử nhòe (Unsharp Mask + Upscale 2x)
@@ -127,10 +127,10 @@ class QRDetector:
                 if crop.size == 0 or crop.shape[0] < 24 or crop.shape[1] < 24:
                     continue
 
-                # Kiểm tra đặc trưng tương phản đen-trắng của bảng QR (loại bỏ báo động giả trên tường/sàn phẳng)
+                # Kiểm tra đặc trưng tương phản đen-trắng của bảng QR (ngưỡng thích ứng với vệt nhòe quang học khi quay gắt)
                 gray_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
                 p95, p5 = np.percentile(gray_crop, [95, 5])
-                if float(np.std(gray_crop)) < 32.0 or (p95 - p5) < 95.0 or p95 < 135.0:
+                if float(np.std(gray_crop)) < 18.0 or (p95 - p5) < 48.0 or p95 < 110.0:
                     continue
 
                 decoded_from_roi = None
@@ -158,7 +158,7 @@ class QRDetector:
                 dewarped = cv2.resize(crop, (160, 160)) if self.enable_dewarp else None
 
                 # Nếu giải mã được từ ROI làm nét HOẶC xác suất AI YOLO-Fastest V2 cao (đang quay nhòe)
-                if decoded_from_roi or q_conf >= 0.60:
+                if decoded_from_roi or q_conf >= 0.48:
                     qr_text = decoded_from_roi or self.last_decoded_text or "TURN_2"
                     results.append(QRDetectionResult(
                         points=pts_ordered,

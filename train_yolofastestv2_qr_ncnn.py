@@ -56,15 +56,17 @@ def clean_hud_and_green_overlay(frame: np.ndarray) -> np.ndarray:
 
 def extract_record_dash_data():
     """
-    Quét video mới record-.mp4 & line_qr.mp4 để trích xuất:
-    1) Các khung hình chứa mã QR khi đang quay (bị nhòe chuyển động, nghiêng, chói sáng)
+    Quét các video record-.mp4, record2.mp4, record3.mp4 & line_qr.mp4 để trích xuất:
+    1) Các khung hình chứa mã QR khi đang quay tốc độ cao (bị nhòe chuyển động ngang, nghiêng, chói sáng)
     2) Các khung hình âm tính (không có bạt, hoặc góc phòng)
     Lưu ảnh vào datasets/batden_multi_angle_v3/images/{train,val}
     và lưu mask QR vào datasets/batden_multi_angle_v3/qr_masks/{train,val}.
     """
+    import json
     os.makedirs(QR_MASK_DIR_TRAIN, exist_ok=True)
     os.makedirs(QR_MASK_DIR_VAL, exist_ok=True)
 
+    # 1. Trích xuất từ record-.mp4
     cap = cv2.VideoCapture(os.path.join(WORKSPACE, "record-.mp4"))
     frames = []
     while True:
@@ -75,14 +77,13 @@ def extract_record_dash_data():
     cap.release()
     print(f"[DATA] Đã nạp {len(frames)} frames từ record-.mp4")
 
-    # Lấy 4 mẫu template chuẩn của bảng QR từ các khoảng cách/góc độ trong record-.mp4
+    # Mẫu template chuẩn của bảng QR
     t1 = cv2.cvtColor(frames[67][378:462, 106:210], cv2.COLOR_BGR2GRAY)
     t2 = cv2.cvtColor(frames[91][352:442, 745:838], cv2.COLOR_BGR2GRAY)
     t3 = cv2.cvtColor(frames[99][355:450, 995:1092], cv2.COLOR_BGR2GRAY)
     t4 = cv2.cvtColor(frames[565][372:492, 1085:1202], cv2.COLOR_BGR2GRAY)
     templates = [t1, t2, t3, t4]
 
-    # Lưu sẵn bản sạch của 4 mẫu bảng QR để chèn (Copy-Paste Augmentation) kèm hiệu ứng Motion Blur
     qr_patches_bgr = [
         frames[67][375:465, 104:212].copy(),
         frames[91][350:444, 743:840].copy(),
@@ -95,7 +96,6 @@ def extract_record_dash_data():
 
     for idx in range(0, len(frames), 2):
         f = frames[idx]
-        # Bỏ qua các frame có vẽ overlay xanh cyan hoặc khung vàng của phần mềm cũ (kiểm tra pixel vàng/cyan)
         roi_lower = f[300:, :]
         b, g, r = roi_lower[:, :, 0].astype(np.int16), roi_lower[:, :, 1].astype(np.int16), roi_lower[:, :, 2].astype(np.int16)
         has_cyan_overlay = np.sum((b - r > 55) & (g - r > 45) & (b > 95)) > 1500
@@ -124,7 +124,6 @@ def extract_record_dash_data():
             h_f, w_f = clean_f.shape[:2]
             bx, by, bw, bh = best_box
 
-            # Tạo mask QR ở độ phân giải 320x320
             qr_mask = np.zeros((h_f, w_f), dtype=np.uint8)
             cv2.rectangle(qr_mask, (bx, by), (bx + bw, by + bh), 255, -1)
 
@@ -138,7 +137,6 @@ def extract_record_dash_data():
             qr_out = os.path.join(DATASET_DIR, "qr_masks", split, f"{name}.png")
 
             cv2.imwrite(img_out, img_320)
-            # Trong các frame quay tìm TURN_2 này không có bạt đen (hoặc bạt đã khuất) -> label path rỗng
             with open(lbl_out, "w") as lf:
                 pass
             cv2.imwrite(qr_out, qr_320)
@@ -148,7 +146,92 @@ def extract_record_dash_data():
             else:
                 added_qr_val += 1
 
-    # Quét thêm các ảnh sẵn có trong datasets/batden_multi_angle_v3 bằng zxingcpp để tự động tạo qr_mask nếu ảnh đó có QR (vd: line_qr)
+    # 2. Trích xuất từ record2.mp4 (Quay tốc độ cao)
+    r2_lbl_file = "/home/rinaka/.gemini/antigravity/brain/addb9986-787f-42ef-919c-ddbe26beb407/scratch/r2_labels.json"
+    if os.path.exists(r2_lbl_file) and os.path.exists(os.path.join(WORKSPACE, "record2.mp4")):
+        r2_lbls = json.load(open(r2_lbl_file))
+        cap2 = cv2.VideoCapture(os.path.join(WORKSPACE, "record2.mp4"))
+        fr2 = []
+        while True:
+            ret, f = cap2.read()
+            if not ret: break
+            fr2.append(f)
+        cap2.release()
+        print(f"[DATA] Đã nạp {len(fr2)} frames từ record2.mp4")
+
+        # Thêm patch từ record2
+        if len(fr2) > 38:
+            qr_patches_bgr.append(fr2[38][340:430, 1100:1210].copy())
+
+        for k_str, v in r2_lbls.items():
+            f_idx = int(k_str)
+            if f_idx >= len(fr2): continue
+            score = v[4]
+            src_type = v[5]
+            if src_type == "seed" or score >= 0.58:
+                f = fr2[f_idx]
+                clean_f = clean_hud_and_green_overlay(f)
+                h_f, w_f = clean_f.shape[:2]
+                x1, y1, x2, y2 = max(0, v[0]), max(0, v[1]), min(w_f, v[2]), min(h_f, v[3])
+                if (x2 - x1) < 28 or (y2 - y1) < 28: continue
+
+                qr_mask = np.zeros((h_f, w_f), dtype=np.uint8)
+                cv2.rectangle(qr_mask, (x1, y1), (x2, y2), 255, -1)
+
+                img_320 = cv2.resize(clean_f, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_LINEAR)
+                qr_320 = cv2.resize(qr_mask, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_NEAREST)
+
+                split = "val" if (f_idx % 10 == 0) else "train"
+                name = f"rec2_qr_f{f_idx:03d}"
+                cv2.imwrite(os.path.join(DATASET_DIR, "images", split, f"{name}.jpg"), img_320)
+                with open(os.path.join(DATASET_DIR, "labels", split, f"{name}.txt"), "w") as lf:
+                    pass
+                cv2.imwrite(os.path.join(DATASET_DIR, "qr_masks", split, f"{name}.png"), qr_320)
+
+                if split == "train": added_qr_train += 1
+                else: added_qr_val += 1
+
+    # 3. Trích xuất từ record3.mp4 (Quay tốc độ cao)
+    r3_lbl_file = "/home/rinaka/.gemini/antigravity/brain/addb9986-787f-42ef-919c-ddbe26beb407/scratch/r3_labels.json"
+    if os.path.exists(r3_lbl_file) and os.path.exists(os.path.join(WORKSPACE, "record3.mp4")):
+        r3_lbls = json.load(open(r3_lbl_file))
+        cap3 = cv2.VideoCapture(os.path.join(WORKSPACE, "record3.mp4"))
+        fr3 = []
+        while True:
+            ret, f = cap3.read()
+            if not ret: break
+            fr3.append(f)
+        cap3.release()
+        print(f"[DATA] Đã nạp {len(fr3)} frames từ record3.mp4")
+
+        for k_str, v in r3_lbls.items():
+            f_idx = int(k_str)
+            if f_idx >= len(fr3): continue
+            # lấy các frame cách nhau 2 để tránh trùng lặp
+            if f_idx % 2 != 0: continue
+            f = fr3[f_idx]
+            clean_f = clean_hud_and_green_overlay(f)
+            h_f, w_f = clean_f.shape[:2]
+            x1, y1, x2, y2 = max(0, v[0]), max(0, v[1]), min(w_f, v[2]), min(h_f, v[3])
+            if (x2 - x1) < 28 or (y2 - y1) < 28: continue
+
+            qr_mask = np.zeros((h_f, w_f), dtype=np.uint8)
+            cv2.rectangle(qr_mask, (x1, y1), (x2, y2), 255, -1)
+
+            img_320 = cv2.resize(clean_f, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_LINEAR)
+            qr_320 = cv2.resize(qr_mask, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_NEAREST)
+
+            split = "val" if (f_idx % 8 == 0) else "train"
+            name = f"rec3_qr_f{f_idx:03d}"
+            cv2.imwrite(os.path.join(DATASET_DIR, "images", split, f"{name}.jpg"), img_320)
+            with open(os.path.join(DATASET_DIR, "labels", split, f"{name}.txt"), "w") as lf:
+                pass
+            cv2.imwrite(os.path.join(DATASET_DIR, "qr_masks", split, f"{name}.png"), qr_320)
+
+            if split == "train": added_qr_train += 1
+            else: added_qr_val += 1
+
+    # Tự động đồng bộ qr_masks cho các ảnh cũ
     for split in ["train", "val"]:
         img_dir = os.path.join(DATASET_DIR, "images", split)
         qr_dir = os.path.join(DATASET_DIR, "qr_masks", split)
@@ -180,7 +263,7 @@ def extract_record_dash_data():
                 pass
             cv2.imwrite(qr_out, qr_m)
 
-    print(f"[DATA] Đã trích xuất {added_qr_train} ảnh Train QR & {added_qr_val} ảnh Val QR từ record-.mp4")
+    print(f"[DATA] Tổng cộng đã tích hợp: {added_qr_train} ảnh Train QR & {added_qr_val} ảnh Val QR (từ record-, record2, record3)")
     return qr_patches_bgr
 
 
@@ -335,9 +418,9 @@ class MultiTaskPathQRDataset(Dataset):
                 ph = int(pw * random.uniform(0.95, 1.25))
                 patch_resized = cv2.resize(patch, (pw, ph), interpolation=cv2.INTER_LINEAR)
 
-                # Mô phỏng nhòe chuyển động ngang khi xe đang xoay (Horizontal Motion Blur)
-                if random.random() < 0.75:
-                    ksize = random.choice([3, 5, 7])
+                # Mô phỏng nhòe chuyển động ngang khi xe đang xoay tốc độ cao (Horizontal Motion Blur)
+                if random.random() < 0.80:
+                    ksize = random.choice([3, 5, 7, 9, 11])
                     kernel_mb = np.zeros((ksize, ksize), dtype=np.float32)
                     kernel_mb[ksize // 2, :] = 1.0 / ksize
                     patch_resized = cv2.filter2D(patch_resized, -1, kernel_mb)
@@ -348,9 +431,9 @@ class MultiTaskPathQRDataset(Dataset):
                 qr_mask[py : py + ph, px : px + pw] = 1
                 path_mask[py : py + ph, px : px + pw] = 0
 
-            # Nếu ảnh đã có QR thật từ record-.mp4, mô phỏng thêm nhòe chuyển động khi quay nhanh
-            elif qr_mask.sum() > 0 and random.random() < 0.5:
-                ksize = random.choice([3, 5])
+            # Nếu ảnh đã có QR thật từ record-.mp4 / record2 / record3, mô phỏng thêm nhòe chuyển động khi quay gắt
+            elif qr_mask.sum() > 0 and random.random() < 0.65:
+                ksize = random.choice([3, 5, 7, 9, 11])
                 kernel_mb = np.zeros((ksize, ksize), dtype=np.float32)
                 kernel_mb[ksize // 2, :] = 1.0 / ksize
                 img = cv2.filter2D(img, -1, kernel_mb)
@@ -415,6 +498,10 @@ def evaluate(model, val_loader):
 
 
 def main():
+    try:
+        os.nice(15)
+    except Exception:
+        pass
     # Giới hạn 2 luồng CPU nhẹ nhàng để máy chạy êm ái
     torch.set_num_threads(2)
 
@@ -434,7 +521,7 @@ def main():
     model = YOLOFastestV2MultiTaskSeg(num_classes=2, export_mode=False)
 
     # Nạp trọng số Backbone + Neck đã học từ bản trước (Transfer Learning) để hội tụ cực nhanh
-    prev_pt = "/tmp/yolo_fastestv2_fp32.pt"
+    prev_pt = "/tmp/yolo_fastestv2_mt_fp32.pt" if os.path.exists("/tmp/yolo_fastestv2_mt_fp32.pt") else "/tmp/yolo_fastestv2_fp32.pt"
     if os.path.exists(prev_pt):
         try:
             old_jit = torch.jit.load(prev_pt)
@@ -446,18 +533,17 @@ def main():
                     new_sd[k] = v.clone()
                     transferred += 1
                 elif k == "head.1.weight" and v.shape[0] == 1:
-                    # Copy trọng số class 0 (Path) sang channel 0 của head mới
                     new_sd[k][0:1] = v.clone()
                     transferred += 1
                 elif k == "head.1.bias" and v.shape[0] == 1:
                     new_sd[k][0:1] = v.clone()
                     transferred += 1
             model.load_state_dict(new_sd)
-            print(f"[TRANSFER] Đã kế thừa {transferred} tầng trọng số từ YOLO-Fastest V2 trước đó!")
+            print(f"[TRANSFER] Đã kế thừa {transferred} tầng trọng số từ {prev_pt}!")
         except Exception as e:
             print("[WARN] Không nạp được checkpoint cũ:", e)
 
-    epochs = 22
+    epochs = 24
     optimizer = torch.optim.AdamW(model.parameters(), lr=2.8e-3, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-4)
     bce_fn = nn.BCEWithLogitsLoss()
