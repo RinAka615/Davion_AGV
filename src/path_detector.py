@@ -54,6 +54,8 @@ class DetectionResult:
     valid_scanlines_count: int = 0
     total_scanlines_count: int = 0
     poly_coeffs: Optional[np.ndarray] = None
+    distance_m: Optional[float] = None                        # Khoảng cách từ xe đến luống (mét)
+    distance_source: str = "none"                             # Nguồn đo: 'Depth Cam' hoặc 'Hình học'
 
 
 class PathDetector:

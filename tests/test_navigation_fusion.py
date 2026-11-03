@@ -59,10 +59,12 @@ def create_mock_path_result(
     path_center_x: int = 320,
     ref_y: int = 400,
     offset_px: float = 0.0,
-    bounding_box: Optional[Tuple[int, int, int, int]] = (100, 200, 350, 300)
+    bounding_box: Optional[Tuple[int, int, int, int]] = (100, 200, 350, 300),
+    distance_m: Optional[float] = None,
+    distance_source: str = "none"
 ) -> DetectionResult:
     """Tạo đối tượng DetectionResult giả lập cho bám đường (Path Tracking). S = 350*300 = 105,000 px²."""
-    return DetectionResult(
+    res = DetectionResult(
         state=TrackingState.TRACKING,
         confidence=85.0,
         lateral_offset_px=offset_px,
@@ -73,6 +75,9 @@ def create_mock_path_result(
         box_center=(path_center_x, ref_y),
         center_method="path"
     )
+    res.distance_m = distance_m
+    res.distance_source = distance_source
+    return res
 
 
 def test_qr_size_threshold_check():
@@ -804,6 +809,63 @@ def test_path_detection_by_min_area_and_height():
     print("[PASS] test_path_detection_by_min_area_and_height: Min Area & Height based path acquisition 100% verified!")
 
 
+def test_path_detection_rejects_distant_row3_and_accepts_target_row():
+    """Kiểm tra tính năng kết hợp Min Area + Min/Max Distance để loại bỏ luống thứ 3 ở xa:
+    1. Khi đang xoay tìm luống, Luống 3 ở hàng xa xuất hiện:
+       - Diện tích lớn (S = 120,000 px² >= 100,000 px²)
+       - Tâm lệch ít (|offset| = 50px <= 200px)
+       - Nhưng khoảng cách đo được = 3.8m > path_max_distance_m (2.5m)
+       -> Robot BÁC BỎ Luống 3, TIẾP TỤC XOAY (B4=3, TURNING_RIGHT_SEEK_PATH)!
+    2. Khi robot xoay tới đúng luống mục tiêu trước mặt:
+       - Diện tích S = 130,000 px² >= 100,000 px²
+       - Khoảng cách đo được = 1.1m (nằm trong [0.3m, 2.5m])
+       -> Robot KHÓA TRÚNG LUỐNG MỤC TIÊU NGAY LẬP TỨC (B4=0, state=IDLE)!
+    """
+    frame_shape = (720, 1280)
+    mission = QRTurnMissionManager(
+        delay_turn2_sec=0.0,
+        confirm_frames=1,
+        calib_turn2_stop_only=False,
+        turn2_seek_mode="area",
+        path_min_area=100000.0,
+        path_min_distance_m=0.3,
+        path_max_distance_m=2.5
+    )
+    base_nav = FusedNavigationTarget(None, 0.0, '', False, 'IDLE', None, (0, 0), 0.0, 0, False, 0)
+
+    # 1. Tiếp cận trạm Turn 2
+    qr_turn2 = create_mock_qr(cx=640, cy=400, width=220, height=220, text="TURN_2")
+    res_start = mission.process(base_nav, [qr_turn2], frame_shape, now=0.0)
+    assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH
+    assert res_start.uart_flag_byte == 3
+
+    # 2. Luống 3 ở xa lọt vào tầm nhìn (Khoảng cách 3.8m > 2.5m)
+    row3_distant = create_mock_path_result(
+        path_center_x=640, ref_y=300, offset_px=50.0,
+        bounding_box=(100, 150, 400, 300),
+        distance_m=3.8,
+        distance_source="Depth Cam"
+    )
+    res_row3 = mission.process(base_nav, [], frame_shape, path_res=row3_distant, now=0.1)
+    assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH, "Luống 3 ở xa (3.8m > 2.5m) phải bị từ chối!"
+    assert res_row3.uart_flag_byte == 3, "Vẫn tiếp tục xoay tìm luống mục tiêu!"
+
+    # 3. Luống mục tiêu ở cự ly gần (1.1m thuộc [0.3m, 2.5m])
+    target_row = create_mock_path_result(
+        path_center_x=640, ref_y=550, offset_px=30.0,
+        bounding_box=(150, 250, 380, 350),
+        distance_m=1.1,
+        distance_source="Depth Cam"
+    )
+    res_target = mission.process(base_nav, [], frame_shape, path_res=target_row, now=0.2)
+    assert mission.state == QRTurnMissionState.IDLE, "Luống mục tiêu đúng khoảng cách -> Khóa ngay lập tức!"
+    assert res_target.uart_flag_byte == 0, "Gửi B4=0 để dừng xoay và bám luống mới"
+    assert res_target.mode_name == "PATH_LINE"
+    assert res_target.distance_m == 1.1
+
+    print("[PASS] test_path_detection_rejects_distant_row3_and_accepts_target_row: Row 3 rejection 100% verified!")
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("RUNNING AUTOMATED TEST SUITE FOR NAVIGATION FUSION")
@@ -824,7 +886,8 @@ if __name__ == "__main__":
     test_calib_turn2_rotates_and_stops_completely()
     test_idle_direct_turn2_station_trigger()
     test_path_detection_by_min_area_and_height()
+    test_path_detection_rejects_distant_row3_and_accepts_target_row()
     print("=" * 60)
-    print("ALL 16 NAVIGATION FUSION TESTS PASSED 100%!")
+    print("ALL 17 NAVIGATION FUSION TESTS PASSED 100%!")
     print("=" * 60)
 

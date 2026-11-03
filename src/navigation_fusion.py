@@ -16,6 +16,7 @@ import numpy as np
 
 from qr_scanner.detector import QRDetectionResult
 from src.path_detector import DetectionResult, TrackingState
+from src.depth_camera import estimate_monocular_distance
 
 
 class QRTurnMissionState(str, Enum):
@@ -44,6 +45,8 @@ class FusedNavigationTarget:
     uart_flag_byte: int = 0                   # Byte 4 gửi STM32: 0: Chạy, 1: Dừng, 2: Rẽ trái
     mission_state: str = "IDLE"               # Trạng thái nhiệm vụ chuyển hướng TURN1 -> TURN2
     mission_status_desc: str = ""             # Mô tả chi tiết trạng thái nhiệm vụ cho HUD / UI
+    distance_m: Optional[float] = None        # Khoảng cách tới luống hoặc mục tiêu (mét)
+    distance_source: str = ""                 # Nguồn đo: 'Depth Cam' hoặc 'Hình học'
 
 
 def check_qr_exceeds_threshold(
@@ -228,7 +231,9 @@ def fuse_navigation_target(
             active_qr=None,
             ref_y=path_res.ref_y_global,
             qr_stop_triggered=qr_stop_triggered,
-            uart_flag_byte=uart_flag_byte
+            uart_flag_byte=uart_flag_byte,
+            distance_m=getattr(path_res, "distance_m", None),
+            distance_source=getattr(path_res, "distance_source", "")
         )
 
     # 5. TRƯỜNG HỢP 3: MẤT CẢ LỐI ĐI VÀ KHÔNG CÓ QR
@@ -240,7 +245,9 @@ def fuse_navigation_target(
         mode_name="LOST",
         active_qr=None,
         qr_stop_triggered=qr_stop_triggered,
-        uart_flag_byte=uart_flag_byte
+        uart_flag_byte=uart_flag_byte,
+        distance_m=getattr(path_res, "distance_m", None) if path_res else None,
+        distance_source=getattr(path_res, "distance_source", "") if path_res else ""
     )
 
 
@@ -275,6 +282,8 @@ class QRTurnMissionManager:
         turn2_seek_mode: str = "area",
         path_min_area: float = 100000.0,
         path_min_height: float = 0.0,
+        path_min_distance_m: float = 0.3,
+        path_max_distance_m: float = 2.5,
         **kwargs
     ):
         self.stop_duration_sec = stop_duration_sec
@@ -292,6 +301,8 @@ class QRTurnMissionManager:
         self.turn2_seek_mode = str(kwargs.get("turn2_seek_mode", turn2_seek_mode))
         self.path_min_area = float(kwargs.get("path_min_area", path_min_area))
         self.path_min_height = float(kwargs.get("path_min_height", path_min_height))
+        self.path_min_distance_m = float(kwargs.get("path_min_distance_m", path_min_distance_m))
+        self.path_max_distance_m = float(kwargs.get("path_max_distance_m", path_max_distance_m))
 
         self.state = QRTurnMissionState.IDLE
         self.last_status_desc = "Sẵn sàng (Chờ tiếp cận mã TURN_1)"
@@ -748,19 +759,24 @@ class QRTurnMissionManager:
             # - Vị trí tâm luống: |offset| <= path_seek_tolerance_px (mặc định 200px)
             # - Góc nghiêng: |angle| <= path_seek_max_angle_deg (mặc định 20 độ)
             # - DIỆN TÍCH LUỐNG TỐI THIỂU: S = bw * bh >= path_min_area (mặc định 100,000 px² ở chế độ Area)
+            # - KHOẢNG CÁCH LUỐNG (DEPTH / MONOCULAR): path_min_distance_m <= D <= path_max_distance_m (loại Luống 3 ở xa)
             has_path = False
             cur_offset: Optional[float] = None
             cur_angle: float = 0.0
             cur_area: float = 0.0
             cur_height: float = 0.0
+            cur_dist_m: Optional[float] = None
 
             if path_res is not None and path_res.state == TrackingState.TRACKING:
                 cur_offset = path_res.lateral_offset_px
                 cur_angle = calculate_path_heading_angle(path_res) or 0.0
                 if path_res.bounding_box is not None:
-                    _, _, bw, bh = path_res.bounding_box
+                    bx, by, bw, bh = path_res.bounding_box
                     cur_area = float(bw * bh)
                     cur_height = float(bh)
+                    cur_dist_m = getattr(path_res, "distance_m", None)
+                    if cur_dist_m is None:
+                        cur_dist_m = estimate_monocular_distance(y_bottom_px=by + bh, img_height=h_img)
 
                 if cur_offset is not None:
                     is_offset_ok = abs(cur_offset) <= self.path_seek_tolerance_px
@@ -768,11 +784,19 @@ class QRTurnMissionManager:
                     is_area_ok = (cur_area >= self.path_min_area) if getattr(self, "path_min_area", 0) > 0 else True
                     is_height_ok = (cur_height >= self.path_min_height) if getattr(self, "path_min_height", 0) > 0 else True
 
-                    if is_offset_ok and is_angle_ok and is_area_ok and is_height_ok:
+                    # Tiêu chí lọc khoảng cách (Min Dis / Max Dis để loại trừ Luống 3 ở hàng xa):
+                    is_dist_ok = True
+                    if cur_dist_m is not None:
+                        min_d = getattr(self, "path_min_distance_m", 0.0)
+                        max_d = getattr(self, "path_max_distance_m", 999.0)
+                        is_dist_ok = (min_d <= cur_dist_m <= max_d)
+
+                    if is_offset_ok and is_angle_ok and is_area_ok and is_height_ok and is_dist_ok:
                         has_path = True
             elif base_nav.mode_name == "PATH_LINE" and base_nav.target_pt is not None:
                 cur_offset = base_nav.lateral_offset_px
                 cur_angle = 0.0
+                cur_dist_m = getattr(base_nav, "distance_m", None)
                 if cur_offset is not None and abs(cur_offset) <= self.path_seek_tolerance_px:
                     has_path = True
 
@@ -783,7 +807,7 @@ class QRTurnMissionManager:
                 self.consecutive_path_frames = 0
 
             if self.consecutive_path_frames >= min_confirm:
-                # ĐÃ DETECT ĐƯỢC LUỐNG ĐƯỜNG MỚI THỎA MÃN CẢ DIỆN TÍCH, VỊ TRÍ VÀ GÓC NGHIÊNG:
+                # ĐÃ DETECT ĐƯỢC LUỐNG ĐƯỜNG MỚI THỎA MÃN CẢ DIỆN TÍCH, VỊ TRÍ, GÓC VÀ KHOẢNG CÁCH (DEPTH):
                 # BẮT ĐẦU CHẠY BÁM LUỐNG MỚI!
                 # Tầng Python chỉ ưu tiên truyền nhận: reset trạng thái về IDLE và gửi B4 = 0
                 # STM32 sẽ tự động dừng 500ms (STM_QR_PAUSE_PATH_500MS) để triệt tiêu quán tính xoay,
@@ -792,7 +816,8 @@ class QRTurnMissionManager:
                 off_txt = f"|off|={abs(cur_offset):.0f}px≤{self.path_seek_tolerance_px:.0f}" if cur_offset is not None else ""
                 ang_txt = f"|góc|={abs(cur_angle):.1f}°≤{self.path_seek_max_angle_deg:.0f}°"
                 area_txt = f"S={int(cur_area):,}px²" if cur_area > 0 else ""
-                self.last_status_desc = f"🌿 ĐÃ BẮT TRÚNG LUỐNG CHUẨN ({area_txt}, {off_txt}, {ang_txt}): BẮT ĐẦU CHẠY BÁM LUỐNG MỚI!"
+                dist_txt = f"D={cur_dist_m:.2f}m" if cur_dist_m is not None else ""
+                self.last_status_desc = f"🌿 ĐÃ BẮT TRÚNG LUỐNG CHUẨN ({area_txt}, {dist_txt}, {off_txt}): BẮT ĐẦU CHẠY BÁM LUỐNG MỚI!"
 
                 if path_res is not None and path_res.state == TrackingState.TRACKING:
                     target_pt = path_res.path_center or path_res.box_center
@@ -818,7 +843,9 @@ class QRTurnMissionManager:
                     qr_stop_triggered=False,
                     uart_flag_byte=0,  # 0 = Gửi STM32 cờ 0: STM32 dừng 500ms rồi bám luống mới chạy tiếp
                     mission_state=self.state.value,
-                    mission_status_desc=self.last_status_desc
+                    mission_status_desc=self.last_status_desc,
+                    distance_m=cur_dist_m,
+                    distance_source=getattr(path_res, "distance_source", "Hình học") if path_res else ""
                 )
             else:
                 # Failsafe Timeout: Quá 6.0s timeout mà chưa đạt chuẩn -> dừng xoay và bám luống
@@ -845,7 +872,8 @@ class QRTurnMissionManager:
                 # Chưa thỏa mãn điều kiện -> Tiếp tục xoay trái tìm đường (Gửi B4 = 3)
                 if cur_offset is not None:
                     area_info = f", S={int(cur_area):,} px²" if cur_area > 0 else ""
-                    desc_detail = f"|off|={abs(cur_offset):.0f}/{self.path_seek_tolerance_px:.0f}px{area_info}"
+                    dist_info = f", D={cur_dist_m:.2f}m" if cur_dist_m is not None else ""
+                    desc_detail = f"|off|={abs(cur_offset):.0f}/{self.path_seek_tolerance_px:.0f}px{area_info}{dist_info}"
                     self.last_status_desc = f"↩️ ĐANG XOAY TÌM LUỐNG CHUẨN ({desc_detail})..."
                 else:
                     self.last_status_desc = "↩️ STM32 ĐANG XOAY TRÁI TÌM LỐI ĐI/ĐƯỜNG MỚI (Đang dò đường)..."
