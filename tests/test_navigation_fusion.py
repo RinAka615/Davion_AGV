@@ -59,12 +59,10 @@ def create_mock_path_result(
     path_center_x: int = 320,
     ref_y: int = 400,
     offset_px: float = 0.0,
-    bounding_box: Optional[Tuple[int, int, int, int]] = (100, 200, 350, 300),
-    distance_m: Optional[float] = None,
-    distance_source: str = "none"
+    bounding_box: Optional[Tuple[int, int, int, int]] = (100, 200, 350, 300)
 ) -> DetectionResult:
     """Tạo đối tượng DetectionResult giả lập cho bám đường (Path Tracking). S = 350*300 = 105,000 px²."""
-    res = DetectionResult(
+    return DetectionResult(
         state=TrackingState.TRACKING,
         confidence=85.0,
         lateral_offset_px=offset_px,
@@ -75,9 +73,6 @@ def create_mock_path_result(
         box_center=(path_center_x, ref_y),
         center_method="path"
     )
-    res.distance_m = distance_m
-    res.distance_source = distance_source
-    return res
 
 
 def test_qr_size_threshold_check():
@@ -396,70 +391,51 @@ def test_qr_turn_mission_lifecycle():
     assert nav_out.uart_flag_byte == 0, "Frame 1: Đang xác nhận tâm (chống nhiễu), xe tiếp tục quay trái (B4=0)"
     assert mission.consecutive_turn2_frames == 1
 
-    # Frame 2: Xác nhận liên tiếp đủ confirm_frames=2 -> CHÍNH THỨC BẮT TÂM & DỪNG 500MS!
+    # Frame 2: Xác nhận liên tiếp đủ confirm_frames=2 -> CHÍNH THỨC ĐỌC TURN_2 & XOAY TRÁI DÒ LUỐNG MỚI (B4=3)!
     nav_out = mission.process(base_nav, [qr_turn2_centered], frame_shape, now=10.05)
-    assert mission.state == QRTurnMissionState.APPROACHING_TURN2
-    assert nav_out.uart_flag_byte == 2, "Bắt trúng tâm TURN_2 đủ 2 frames -> Gửi Byte 4 = 2 để STM32 dừng 500ms"
-    assert abs(nav_out.lateral_offset_px - 15.0) < 1e-3
-
-    # 7. Trong khoảng 500ms dừng triệt tiêu quán tính (now = 10.2s, dt = 200ms < 500ms)
-    nav_out = mission.process(base_nav, [qr_turn2_centered], frame_shape, now=10.2)
-    assert mission.state == QRTurnMissionState.APPROACHING_TURN2
-    assert nav_out.uart_flag_byte == 2, "Vẫn trong khoảng 500ms dừng quán tính -> Gửi Byte 4 = 2"
-
-    # 8. Hết 500ms (now = 10.6s, dt = 600ms >= 500ms): Bắt đầu tiến theo tâm TURN_2!
-    nav_out = mission.process(base_nav, [qr_turn2_centered], frame_shape, now=10.6)
-    assert mission.state == QRTurnMissionState.APPROACHING_TURN2
-    assert nav_out.uart_flag_byte == 0, "Hết 500ms -> Gửi Byte 4 = 0 để STM32 tiến lên theo tâm TURN_2 qua PID"
-    assert abs(nav_out.lateral_offset_px - 15.0) < 1e-3
-
-    # 9. Tiếp cận TURN_2 và kích thước đạt trạm dừng (>= 200px, vd 210x210):
-    # KÍCH HOẠT BƯỚC MỚI: DỪNG 500MS VÀ XOAY TRÁI TÌM ĐƯỜNG (Byte 4 = 3)!
-    qr_turn2_reached = create_mock_qr(cx=645, cy=400, width=210, height=210, text="TURN_2")
-    nav_out = mission.process(base_nav, [qr_turn2_reached], frame_shape, now=12.0)
     assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH
-    assert nav_out.uart_flag_byte == 3, "Đã đến trạm TURN_2 (>=200px) -> Gửi Byte 4 = 3 để STM32 dừng 500ms rồi xoay trái tìm đường"
+    assert nav_out.uart_flag_byte == 3, "Đọc TURN_2 -> Gửi Byte 4 = 3 để STM32 xoay trái tìm luống mới ngay lập tức"
 
-    # 10. Trong 500ms dừng triệt tiêu quán tính tại TURN_2 (now = 12.3s, dt = 300ms < 500ms)
-    nav_out = mission.process(base_nav, [], frame_shape, now=12.3)
+    # 7. Trong 0.8s đầu xoay thoát khỏi vị trí trạm cũ (now = 10.4s, dt = 350ms < 800ms)
+    nav_out = mission.process(base_nav, [], frame_shape, now=10.4)
     assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH
-    assert nav_out.uart_flag_byte == 3, "Đang trong 500ms dừng tại trạm TURN_2 -> Gửi Byte 4 = 3"
+    assert nav_out.uart_flag_byte == 3, "Vẫn trong thời gian xoay thoát trạm cũ -> Tiếp tục gửi Byte 4 = 3"
 
-    # 11. Hết 500ms: STM32 xoay trái tìm đường, camera chưa thấy đường (now = 12.8s)
-    nav_out = mission.process(base_nav, [], frame_shape, now=12.8)
+    # 8. Hết 0.8s xoay ban đầu: STM32 tiếp tục xoay trái tìm đường (now = 11.0s)
+    nav_out = mission.process(base_nav, [], frame_shape, now=11.0)
     assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH
-    assert nav_out.uart_flag_byte == 3, "Đang xoay trái tìm đường -> Tiếp tục gửi Byte 4 = 3"
+    assert nav_out.uart_flag_byte == 3, "Tiếp tục xoay trái tìm đường -> Gửi Byte 4 = 3"
 
-    # 12. Frame 1: Camera bắt đầu phát hiện lối đi mới (now = 13.0s, frame 1)
-    path_new = create_mock_path_result(path_center_x=650, ref_y=500, offset_px=10.0)
+    # 9. Frame 1: Camera bắt đầu phát hiện lối đi mới (now = 11.2s, frame 1)
+    path_new = create_mock_path_result(path_center_x=650, ref_y=500, offset_px=10.0, bounding_box=(150, 250, 380, 350))
     base_nav_new = fuse_navigation_target(path_res=path_new, qr_results=[], frame_shape=frame_shape)
-    nav_out = mission.process(base_nav_new, [], frame_shape, path_res=path_new, now=13.0)
+    nav_out = mission.process(base_nav_new, [], frame_shape, path_res=path_new, now=11.2)
     assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH
     assert nav_out.uart_flag_byte == 3, "Khung hình 1 phát hiện đường -> Đang xác nhận ổn định (chống nhiễu)"
 
-    # 13. Frame 2: Xác nhận phát hiện luống đường ổn định (now = 13.1s, frame 2)
+    # 10. Frame 2: Xác nhận phát hiện luống đường ổn định (now = 11.25s, frame 2)
     # -> TỰ ĐỘNG RESET VỀ IDLE & BẮT ĐẦU CHẠY BÁM LUỐNG MỚI (Byte 4 = 0, STM32 tự dừng 500ms rồi bám luống)!
-    nav_out = mission.process(base_nav_new, [], frame_shape, path_res=path_new, now=13.1)
+    nav_out = mission.process(base_nav_new, [], frame_shape, path_res=path_new, now=11.25)
     assert mission.state == QRTurnMissionState.IDLE, "Đã thấy luống -> Tự động reset về IDLE để bám luống mới chạy tiếp!"
     assert nav_out.uart_flag_byte == 0, "Báo STM32 chuyển sang bám luống mới (Byte 4 = 0)"
     assert nav_out.mode_name == "PATH_LINE"
     assert nav_out.qr_stop_triggered is False
     assert abs(nav_out.lateral_offset_px - 10.0) < 1e-3
 
-    # 14. Kiểm tra xe tiếp tục chạy bám luống mới ở IDLE (Chu trình 8 bước khép kín và quay lại bước 1)
-    nav_out = mission.process(base_nav_new, [], frame_shape, path_res=path_new, now=14.0)
+    # 11. Kiểm tra xe tiếp tục chạy bám luống mới ở IDLE
+    nav_out = mission.process(base_nav_new, [], frame_shape, path_res=path_new, now=12.0)
     assert mission.state == QRTurnMissionState.IDLE
     assert nav_out.uart_flag_byte == 0, "Duy trì bám luống mới (Byte 4 = 0)"
     assert nav_out.mode_name == "PATH_LINE"
 
-    # 15. Test Reset thủ công (khi người dùng bấm Reset trên UI hoặc gạt switch)
+    # 12. Test Reset thủ công (khi người dùng bấm Reset trên UI hoặc gạt switch)
     mission.reset()
     assert mission.state == QRTurnMissionState.IDLE
     base_nav_cleared = fuse_navigation_target(path_res=path_res, qr_results=[], frame_shape=frame_shape)
-    nav_out = mission.process(base_nav_cleared, [], frame_shape, now=16.0)
+    nav_out = mission.process(base_nav_cleared, [], frame_shape, now=14.0)
     assert nav_out.uart_flag_byte == 0
 
-    print("[PASS] test_qr_turn_mission_lifecycle: Full QR turn mission cycle (IDLE -> TURN_1 B4=1 -> SEEK TURN_2 B4=0 -> CENTERED TURN_2 B4=2 -> PAUSE 500ms B4=2 -> APPROACH B4=0 -> REACH TURN_2 >=200px B4=3 -> PAUSE 500ms B4=3 -> ROTATE LEFT B4=3 -> DETECT PATH B4=0 -> LOOP BACK TO IDLE TRACKING NEW PATH) 100% verified")
+    print("[PASS] test_qr_turn_mission_lifecycle: Full QR turn mission cycle (IDLE -> TURN_1 B4=1 -> SEEK TURN_2 B4=0 -> READ TURN_2 B4=3 -> ROTATE SEEK PATH B4=3 -> DETECT PATH B4=0 -> LOOP BACK TO IDLE TRACKING NEW PATH) 100% verified")
 
 
 def test_method_3_path_seek_with_offset_and_heading_angle():
@@ -527,9 +503,8 @@ def test_method_3_path_seek_with_offset_and_heading_angle():
 def test_turn2_detection_during_rotation_stops_and_approaches():
     """Kiểm tra trường hợp thực tế khi đang xoay tìm TURN_2:
     - YOLO phát hiện QR box ở vị trí cx=516 (lệch -124px trên khung 1280x720)
-    - Do xe đang xoay, text QR chưa giải mã hoặc text cũ là TURN_1
-    - Hệ thống vẫn nhận diện đúng TURN_2, thỏa mãn align_tolerance_px=180px
-    - Gửi Byte 4 = 2 (dừng 500ms) rồi chuyển sang tiến theo tâm với Byte 4 = 0
+    - Hệ thống nhận diện đúng TURN_2, thỏa mãn align_tolerance_px=180px
+    - Ngay khi xác nhận TURN_2: Chuyển ngay sang XOAY TRÁI TÌM LUỐNG MỚI (B4=3), không đi thẳng!
     """
     frame_shape = (720, 1280) # cam_cx = 640
     mission = QRTurnMissionManager(align_tolerance_px=180.0, confirm_frames=2)
@@ -559,23 +534,12 @@ def test_turn2_detection_during_rotation_stops_and_approaches():
     assert res0.uart_flag_byte == 0, f"Expected B4=0 on frame 1 debounce, got {res0.uart_flag_byte}"
     assert mission.consecutive_turn2_frames == 1
 
-    # Khung hình 2: Đủ 2 frame liên tiếp -> Chuyển sang APPROACHING_TURN2 và gửi B4 = 2
+    # Khung hình 2: Đủ 2 frame liên tiếp -> Chuyển sang TURNING_RIGHT_SEEK_PATH và gửi B4 = 3 (xoay tìm luống mới)!
     res1 = mission.process(base_nav, [qr_ai], frame_shape, now=10.04)
-    assert mission.state == QRTurnMissionState.APPROACHING_TURN2
-    assert res1.uart_flag_byte == 2, f"Expected B4=2 (dừng 500ms triệt tiêu quán tính quay), got {res1.uart_flag_byte}"
-    assert abs(res1.lateral_offset_px - (-124.0)) < 1e-3
+    assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH
+    assert res1.uart_flag_byte == 3, f"Expected B4=3 (bắt đầu xoay trái tìm luống), got {res1.uart_flag_byte}"
 
-    # 2. Trong 500ms dừng (now = 10.3s): Duy trì B4 = 2
-    res2 = mission.process(base_nav, [qr_ai], frame_shape, now=10.3)
-    assert res2.uart_flag_byte == 2
-
-    # 3. Hết 500ms dừng (now = 10.7s): Gửi B4 = 0 để xe tiến theo tâm TURN_2 qua PID
-    res3 = mission.process(base_nav, [qr_ai], frame_shape, now=10.7)
-    assert mission.state == QRTurnMissionState.APPROACHING_TURN2
-    assert res3.uart_flag_byte == 0, f"Expected B4=0 (tiến theo tâm TURN_2), got {res3.uart_flag_byte}"
-    assert abs(res3.lateral_offset_px - (-124.0)) < 1e-3
-
-    print("[PASS] test_turn2_detection_during_rotation_stops_and_approaches: Detection -> Stop 500ms (B4=2) -> Approach Center (B4=0) 100% verified!")
+    print("[PASS] test_turn2_detection_during_rotation_stops_and_approaches: Reading TURN_2 immediately rotates left (B4=3) 100% verified!")
 
 
 def test_turn_delays_and_confirm_frames():
@@ -635,33 +599,28 @@ def test_turn_delays_and_confirm_frames():
 
     res_c3 = mission.process(base_nav, [fake_turn2], frame_shape, now=2.76)
     assert mission.consecutive_turn2_frames == 3
-    assert mission.state == QRTurnMissionState.APPROACHING_TURN2, "Đủ 3 frames liên tiếp -> Khóa tâm thành công!"
-    assert res_c3.uart_flag_byte == 2
+    assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH, "Đủ 3 frames liên tiếp -> Khóa tâm và xoay dò luống (B4=3)!"
+    assert res_c3.uart_flag_byte == 3
 
     # --- KỊCH BẢN 2: TRỄ TẠI TURN 2 ---
-    # Tiến tới trạm Turn 2 (>= 200px)
-    qr_turn2_station = create_mock_qr(cx=640, cy=400, width=210, height=210, text="TURN_2")
-    res_reach = mission.process(base_nav, [qr_turn2_station], frame_shape, now=4.0)
-    assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH
-    assert res_reach.uart_flag_byte == 3
-
-    # Trong 1.2s trễ tại Turn 2 (now = 4.8s, dt = 0.8s < 1.2s):
-    # Dù có đường (nhiễu rác bên mép trạm) thì KHÔNG được bắt để tránh ủi bậy!
+    # Bắt đầu xoay tìm đường từ lúc đọc TURN_2 (now = 2.76s)
+    # Trong 1.2s trễ tại Turn 2 (now = 3.5s, dt = 3.5 - 2.76 = 0.74s < 1.2s):
+    # Dù có đường thì KHÔNG được bắt để tránh nhận nhầm luống cũ!
     path_noise = create_mock_path_result(path_center_x=640, ref_y=500, offset_px=0.0)
-    res_t2_blind = mission.process(base_nav, [], frame_shape, path_res=path_noise, now=4.8)
+    res_t2_blind = mission.process(base_nav, [], frame_shape, path_res=path_noise, now=3.5)
     assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH
     assert res_t2_blind.uart_flag_byte == 3, "Trong 1.2s trễ Turn 2 -> Duy trì B4=3, không bắt đường tránh ủi"
     assert mission.consecutive_path_frames == 0
 
-    # Hết 1.2s (now = 5.3s, dt = 1.3s >= 1.2s): Bắt đầu kiểm tra confirm 3 frames đường
+    # Hết 1.2s (now = 4.1s, dt = 4.1 - 2.76 = 1.34s >= 1.2s): Bắt đầu kiểm tra confirm 3 frames đường
     for i in range(1, 3):
-        res_p = mission.process(base_nav, [], frame_shape, path_res=path_noise, now=5.3 + i*0.04)
+        res_p = mission.process(base_nav, [], frame_shape, path_res=path_noise, now=4.1 + i*0.04)
         assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH
         assert mission.consecutive_path_frames == i
         assert res_p.uart_flag_byte == 3
 
     # Frame thứ 3: Hoàn tất bắt đường mới!
-    res_p3 = mission.process(base_nav, [], frame_shape, path_res=path_noise, now=5.42)
+    res_p3 = mission.process(base_nav, [], frame_shape, path_res=path_noise, now=4.22)
     assert mission.state == QRTurnMissionState.IDLE, "Đủ 3 frames đường -> Bắt đầu bám luống mới thành công!"
     assert res_p3.uart_flag_byte == 0
 
@@ -681,7 +640,7 @@ def test_calib_turn2_rotates_and_stops_completely():
         delay_turn2_sec=3.0,
         calib_turn2_stop_only=True
     )
-    mission.state = QRTurnMissionState.APPROACHING_TURN2
+    mission.state = QRTurnMissionState.TURNING_LEFT_SEEK_TURN2
     base_nav = FusedNavigationTarget(None, 0.0, '', False, 'IDLE', None, (0, 0), 0.0, 0, False, 0)
 
     # 1. Chạm trạm Turn 2 (>= 200px) tại now=10.0s
@@ -787,21 +746,21 @@ def test_path_detection_by_min_area_and_height():
     assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH, "Vệt rác nhỏ phải bị loại bỏ!"
     assert res_noise.uart_flag_byte == 3
 
-    # 3. Frame tiếp theo (now=0.2s): Mảnh bạt ngắn (hộp 400x60 = 24000 px² < 30000 px², H=60 < 150)
+    # 3. Frame tiếp theo (now=0.9s, đã qua 0.8s trễ): Mảnh bạt ngắn (hộp 400x60 = 24000 px² < 100,000 px²)
     short_path = create_mock_path_result(
         path_center_x=640, ref_y=500, offset_px=0.0,
         bounding_box=(200, 200, 400, 60)
     )
-    res_short = mission.process(base_nav, [], frame_shape, path_res=short_path, now=0.2)
+    res_short = mission.process(base_nav, [], frame_shape, path_res=short_path, now=0.9)
     assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH, "Mảnh bạt ngắn phải bị loại bỏ!"
     assert res_short.uart_flag_byte == 3
 
-    # 4. Frame tiếp theo (now=0.3s): Luống thật vào tầm nhìn (hộp 350x300 = 105,000 px² >= 30,000 px², H=300 >= 150)
+    # 4. Frame tiếp theo (now=1.0s): Luống thật vào tầm nhìn (hộp 350x300 = 105,000 px² >= 100,000 px²)
     real_path = create_mock_path_result(
         path_center_x=640, ref_y=500, offset_px=50.0,
         bounding_box=(200, 200, 350, 300)
     )
-    res_real = mission.process(base_nav, [], frame_shape, path_res=real_path, now=0.3)
+    res_real = mission.process(base_nav, [], frame_shape, path_res=real_path, now=1.0)
     assert mission.state == QRTurnMissionState.IDLE, "Luống thật diện tích lớn -> Lập tức khóa luống không cần delay!"
     assert res_real.uart_flag_byte == 0, "Phát B4=0 để STM32 dừng xoay và bám luống mới"
     assert res_real.mode_name == "PATH_LINE"
@@ -809,61 +768,34 @@ def test_path_detection_by_min_area_and_height():
     print("[PASS] test_path_detection_by_min_area_and_height: Min Area & Height based path acquisition 100% verified!")
 
 
-def test_path_detection_rejects_distant_row3_and_accepts_target_row():
-    """Kiểm tra tính năng kết hợp Min Area + Min/Max Distance để loại bỏ luống thứ 3 ở xa:
-    1. Khi đang xoay tìm luống, Luống 3 ở hàng xa xuất hiện:
-       - Diện tích lớn (S = 120,000 px² >= 100,000 px²)
-       - Tâm lệch ít (|offset| = 50px <= 200px)
-       - Nhưng khoảng cách đo được = 3.8m > path_max_distance_m (2.5m)
-       -> Robot BÁC BỎ Luống 3, TIẾP TỤC XOAY (B4=3, TURNING_RIGHT_SEEK_PATH)!
-    2. Khi robot xoay tới đúng luống mục tiêu trước mặt:
-       - Diện tích S = 130,000 px² >= 100,000 px²
-       - Khoảng cách đo được = 1.1m (nằm trong [0.3m, 2.5m])
-       -> Robot KHÓA TRÚNG LUỐNG MỤC TIÊU NGAY LẬP TỨC (B4=0, state=IDLE)!
+def test_turn2_triggers_rotation_immediately_without_driving_forward():
+    """Kiểm tra: Khi đọc được mã TURN_2, robot PHẢI XOAY TRÁI DÒ LUỐNG (B4=3), TUYỆT ĐỐI KHÔNG ĐI THẲNG (B4=0):
+    1. Khi robot đang xoay tìm TURN_2 (TURNING_LEFT_SEEK_TURN2):
+       - Camera đọc được mã TURN_2
+       - Robot lập tức chuyển sang TURNING_RIGHT_SEEK_PATH với B4 = 3 (xoay tìm luống mới), không đi thẳng!
+    2. Khi robot đang ở IDLE (hoặc người dùng đưa mã TURN_2 vào):
+       - Camera đọc được mã TURN_2 (kể cả kích thước nhỏ)
+       - Robot lập tức chuyển sang TURNING_RIGHT_SEEK_PATH với B4 = 3, không bao giờ gửi B4 = 0!
     """
     frame_shape = (720, 1280)
-    mission = QRTurnMissionManager(
-        delay_turn2_sec=0.0,
-        confirm_frames=1,
-        calib_turn2_stop_only=False,
-        turn2_seek_mode="area",
-        path_min_area=100000.0,
-        path_min_distance_m=0.3,
-        path_max_distance_m=2.5
-    )
+    mission = QRTurnMissionManager(confirm_frames=1)
     base_nav = FusedNavigationTarget(None, 0.0, '', False, 'IDLE', None, (0, 0), 0.0, 0, False, 0)
 
-    # 1. Tiếp cận trạm Turn 2
-    qr_turn2 = create_mock_qr(cx=640, cy=400, width=220, height=220, text="TURN_2")
-    res_start = mission.process(base_nav, [qr_turn2], frame_shape, now=0.0)
-    assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH
-    assert res_start.uart_flag_byte == 3
+    # 1. Test từ IDLE: Đưa mã TURN_2 vào
+    qr_turn2_idle = create_mock_qr(cx=640, cy=380, width=120, height=120, text="TURN_2")
+    res_idle = mission.process(base_nav, [qr_turn2_idle], frame_shape, now=0.0)
+    assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH, "Đọc TURN_2 từ IDLE phải vào xoay dò luống ngay!"
+    assert res_idle.uart_flag_byte == 3, f"Phải gửi B4=3 để xoay, không được gửi B4={res_idle.uart_flag_byte} (đi thẳng)!"
 
-    # 2. Luống 3 ở xa lọt vào tầm nhìn (Khoảng cách 3.8m > 2.5m)
-    row3_distant = create_mock_path_result(
-        path_center_x=640, ref_y=300, offset_px=50.0,
-        bounding_box=(100, 150, 400, 300),
-        distance_m=3.8,
-        distance_source="Depth Cam"
-    )
-    res_row3 = mission.process(base_nav, [], frame_shape, path_res=row3_distant, now=0.1)
-    assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH, "Luống 3 ở xa (3.8m > 2.5m) phải bị từ chối!"
-    assert res_row3.uart_flag_byte == 3, "Vẫn tiếp tục xoay tìm luống mục tiêu!"
+    # 2. Test từ TURNING_LEFT_SEEK_TURN2: Đọc được TURN_2
+    mission.reset()
+    mission.state = QRTurnMissionState.TURNING_LEFT_SEEK_TURN2
+    qr_turn2_seek = create_mock_qr(cx=640, cy=380, width=130, height=130, text="TURN_2")
+    res_seek = mission.process(base_nav, [qr_turn2_seek], frame_shape, now=5.0)
+    assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH, "Đọc TURN_2 khi đang tìm phải chuyển sang xoay dò luống!"
+    assert res_seek.uart_flag_byte == 3, "Phải gửi B4=3 để xoay tìm đường, KHÔNG ĐƯỢC ĐI THẲNG!"
 
-    # 3. Luống mục tiêu ở cự ly gần (1.1m thuộc [0.3m, 2.5m])
-    target_row = create_mock_path_result(
-        path_center_x=640, ref_y=550, offset_px=30.0,
-        bounding_box=(150, 250, 380, 350),
-        distance_m=1.1,
-        distance_source="Depth Cam"
-    )
-    res_target = mission.process(base_nav, [], frame_shape, path_res=target_row, now=0.2)
-    assert mission.state == QRTurnMissionState.IDLE, "Luống mục tiêu đúng khoảng cách -> Khóa ngay lập tức!"
-    assert res_target.uart_flag_byte == 0, "Gửi B4=0 để dừng xoay và bám luống mới"
-    assert res_target.mode_name == "PATH_LINE"
-    assert res_target.distance_m == 1.1
-
-    print("[PASS] test_path_detection_rejects_distant_row3_and_accepts_target_row: Row 3 rejection 100% verified!")
+    print("[PASS] test_turn2_triggers_rotation_immediately_without_driving_forward: Immediate rotation verified 100%!")
 
 
 if __name__ == "__main__":
@@ -886,7 +818,7 @@ if __name__ == "__main__":
     test_calib_turn2_rotates_and_stops_completely()
     test_idle_direct_turn2_station_trigger()
     test_path_detection_by_min_area_and_height()
-    test_path_detection_rejects_distant_row3_and_accepts_target_row()
+    test_turn2_triggers_rotation_immediately_without_driving_forward()
     print("=" * 60)
     print("ALL 17 NAVIGATION FUSION TESTS PASSED 100%!")
     print("=" * 60)

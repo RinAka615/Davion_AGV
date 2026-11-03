@@ -65,7 +65,6 @@ from src.navigation_fusion import (
     QRTurnMissionManager,
     QRTurnMissionState
 )
-from src.depth_camera import AstraDepthCamera, estimate_monocular_distance
 
 # Import module QR Scanner
 from qr_scanner import QRDetector, QRJsonLogger, QRVisualizer, QRDetectionResult
@@ -247,9 +246,6 @@ class CombinedRobotApp(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._on_timer_tick)
 
-        # --- 3.5 CẢM BIẾN ĐO SÂU (DEPTH CAMERA / ORBBEC ASTRA) ---
-        self.depth_camera = AstraDepthCamera()
-
         # --- 4. MÁY TRẠNG THÁI NHIỆM VỤ CHUYỂN HƯỚNG QR (TURN 1 -> TURN 2) ---
         self.qr_mission = QRTurnMissionManager(
             stop_duration_sec=1.0,
@@ -264,9 +260,7 @@ class CombinedRobotApp(QMainWindow):
             calib_turn2_stop_only=False,
             turn2_seek_mode="area",
             path_min_area=100000.0,
-            path_min_height=0.0,
-            path_min_distance_m=0.3,
-            path_max_distance_m=2.5
+            path_min_height=0.0
         )
 
         self._init_ui()
@@ -471,15 +465,11 @@ class CombinedRobotApp(QMainWindow):
         grp_nav_layout.addLayout(telemetry_row)
 
         area_row = QHBoxLayout()
-        self.lbl_path_area = QLabel("📐 Diện tích: N/A")
+        self.lbl_path_area = QLabel("📐 Diện tích luống: N/A")
         self.lbl_path_area.setStyleSheet("color: #e0af68; font-size: 12px; font-weight: bold;")
-        self.lbl_path_distance = QLabel("📏 Khoảng cách: N/A")
-        self.lbl_path_distance.setStyleSheet("color: #7dcfff; font-size: 12px; font-weight: bold;")
         self.lbl_active_nav_source = QLabel("Mục tiêu hiện tại: 🌿 Tâm lối đi (Path)")
         self.lbl_active_nav_source.setStyleSheet("color: #7aa2f7; font-size: 12px; font-weight: bold;")
         area_row.addWidget(self.lbl_path_area)
-        area_row.addSpacing(12)
-        area_row.addWidget(self.lbl_path_distance)
         area_row.addStretch()
         area_row.addWidget(self.lbl_active_nav_source)
         grp_nav_layout.addLayout(area_row)
@@ -731,37 +721,6 @@ class CombinedRobotApp(QMainWindow):
         row_mission_params_3.addWidget(self.spin_path_min_area)
 
         grp_mission_layout.addLayout(row_mission_params_3)
-
-        # Hàng 4: Điều kiện lọc khoảng cách (Min / Max Distance) Depth Camera / Hình học
-        row_mission_params_4 = QHBoxLayout()
-        row_mission_params_4.setSpacing(6)
-
-        lbl_min_dis = QLabel("📏 Min Dis:")
-        lbl_min_dis.setStyleSheet("color: #a9b1d6; font-size: 11px;")
-        self.spin_path_min_dis = QDoubleSpinBox()
-        self.spin_path_min_dis.setRange(0.1, 10.0)
-        self.spin_path_min_dis.setValue(0.3)
-        self.spin_path_min_dis.setSingleStep(0.1)
-        self.spin_path_min_dis.setDecimals(2)
-        self.spin_path_min_dis.setSuffix(" m")
-        self.spin_path_min_dis.valueChanged.connect(self._on_path_min_dis_changed)
-
-        lbl_max_dis = QLabel("📏 Max Dis:")
-        lbl_max_dis.setStyleSheet("color: #a9b1d6; font-size: 11px;")
-        self.spin_path_max_dis = QDoubleSpinBox()
-        self.spin_path_max_dis.setRange(0.2, 10.0)
-        self.spin_path_max_dis.setValue(2.5)
-        self.spin_path_max_dis.setSingleStep(0.1)
-        self.spin_path_max_dis.setDecimals(2)
-        self.spin_path_max_dis.setSuffix(" m")
-        self.spin_path_max_dis.valueChanged.connect(self._on_path_max_dis_changed)
-
-        row_mission_params_4.addWidget(lbl_min_dis)
-        row_mission_params_4.addWidget(self.spin_path_min_dis)
-        row_mission_params_4.addWidget(lbl_max_dis)
-        row_mission_params_4.addWidget(self.spin_path_max_dis)
-
-        grp_mission_layout.addLayout(row_mission_params_4)
 
         self.chk_calib_turn2 = QCheckBox("🎯 Chế độ Calib T2 (Xoay xong dừng hẳn, không bắt luống)")
         self.chk_calib_turn2.setChecked(False)
@@ -1172,14 +1131,6 @@ class CombinedRobotApp(QMainWindow):
         else:
             path_res = self.path_detector.process(frame, None, is_source_valid=False)
 
-        # Cập nhật thông tin khoảng cách (Depth Camera / Fallback Hình học)
-        if hasattr(self, "depth_camera") and self.depth_camera:
-            self.depth_camera.update_frame()
-            if path_res is not None and path_res.bounding_box is not None:
-                dist_m, dist_src = self.depth_camera.get_distance_m(path_res.bounding_box, fw, fh)
-                path_res.distance_m = dist_m
-                path_res.distance_source = dist_src
-
         # -------------------------------------------------------------
         # 2. XỬ LÝ QUÉT MÃ QR (QR CHECKPOINT SCANNER)
         # -------------------------------------------------------------
@@ -1230,9 +1181,8 @@ class CombinedRobotApp(QMainWindow):
             if self.chk_show_bbox.isChecked() and path_res.bounding_box:
                 bx, by, bw, bh = path_res.bounding_box
                 area_val = bw * bh
-                dist_txt = f" | {path_res.distance_m:.2f}m ({path_res.distance_source})" if getattr(path_res, "distance_m", None) is not None else ""
                 cv2.rectangle(vis_frame, (bx, by), (bx + bw, by + bh), (0, 200, 255), 2)
-                cv2.putText(vis_frame, f"[LOI DI: {area_val:,} px^2{dist_txt}]", (bx + 5, by + 22),
+                cv2.putText(vis_frame, f"[LOI DI: {area_val:,} px^2 ({bw}x{bh})]", (bx + 5, by + 22),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 2)
 
             # Vẽ Đường tim dẫn hướng (Centerline)
@@ -1295,10 +1245,6 @@ class CombinedRobotApp(QMainWindow):
                 self.qr_mission.path_min_area = float(self.spin_path_min_area.value())
             if hasattr(self, "spin_path_min_height"):
                 self.qr_mission.path_min_height = float(self.spin_path_min_height.value())
-            if hasattr(self, "spin_path_min_dis"):
-                self.qr_mission.path_min_distance_m = float(self.spin_path_min_dis.value())
-            if hasattr(self, "spin_path_max_dis"):
-                self.qr_mission.path_max_distance_m = float(self.spin_path_max_dis.value())
             if self.qr_mission.state == QRTurnMissionState.TURNING_LEFT_SEEK_TURN2:
                 if hasattr(self, "qr_detector") and hasattr(self.qr_detector, "last_decoded_text"):
                     if self.qr_detector.last_decoded_text and "TURN_1" in self.qr_detector.last_decoded_text.upper():
@@ -1395,30 +1341,13 @@ class CombinedRobotApp(QMainWindow):
                     self.lbl_path_area.setText(f"📐 Luống (quét ngầm): {p_area:,} px²")
                     self.lbl_path_area.setStyleSheet("color: #e0af68; font-size: 12px; font-weight: bold;")
                 else:
-                    self.lbl_path_area.setText("📐 Diện tích: N/A")
+                    self.lbl_path_area.setText("📐 Diện tích luống: N/A")
                     self.lbl_path_area.setStyleSheet("color: #565f89; font-size: 12px;")
-
-            if hasattr(self, "lbl_path_distance"):
-                if path_res and getattr(path_res, "distance_m", None) is not None:
-                    d_m = path_res.distance_m
-                    d_s = getattr(path_res, "distance_source", "")
-                    self.lbl_path_distance.setText(f"📏 Khoảng cách: {d_m:.2f} m ({d_s})")
-                    self.lbl_path_distance.setStyleSheet("color: #7dcfff; font-size: 12px; font-weight: bold;")
-                else:
-                    self.lbl_path_distance.setText("📏 Khoảng cách: N/A")
-                    self.lbl_path_distance.setStyleSheet("color: #565f89; font-size: 12px;")
 
             # Tính toán hướng lái đề xuất
             if fused_nav.mission_state == QRTurnMissionState.COMPLETED_STOPPED.value:
                 self.lbl_steering_action.setText(f"🛑 LỆNH LÁI: DỪNG HOÀN TẤT [B4={fused_nav.uart_flag_byte}] (Đã xoay {self.qr_mission.delay_turn2_sec:.1f}s để kiểm tra đầu xe)")
                 self.lbl_steering_action.setStyleSheet("color: #00E676; font-weight: bold; font-size: 13px;")
-            elif fused_nav.mission_state == QRTurnMissionState.APPROACHING_TURN2.value:
-                if fused_nav.uart_flag_byte == 2:
-                    self.lbl_steering_action.setText("⏸️ LỆNH LÁI: TẠM DỪNG 500MS TRIỆT TIÊU QUÁN TÍNH")
-                    self.lbl_steering_action.setStyleSheet("color: #ff9e64; font-weight: bold; font-size: 13px;")
-                else:
-                    self.lbl_steering_action.setText(f"🚀 LỆNH LÁI: TIẾN THEO TÂM TURN_2 ({fused_nav.offset_direction})")
-                    self.lbl_steering_action.setStyleSheet("color: #7dcfff; font-weight: bold; font-size: 13px;")
             elif fused_nav.mission_state == QRTurnMissionState.STOP_AT_TURN1.value or (fused_nav.uart_flag_byte == 1 and fused_nav.mode_name == "TURN1_STATION"):
                 self.lbl_steering_action.setText("🛑 LỆNH LÁI: GỬI B4=1 ĐẾN TRẠM TURN_1 (STM32 tự dừng 1s & xoay)")
                 self.lbl_steering_action.setStyleSheet("color: #ff5555; font-weight: bold; font-size: 13px;")
@@ -1462,21 +1391,11 @@ class CombinedRobotApp(QMainWindow):
                 if path_res.bounding_box:
                     _, _, pbw, pbh = path_res.bounding_box
                     p_area = pbw * pbh
-                    self.lbl_path_area.setText(f"📐 Diện tích: {p_area:,} px²")
+                    self.lbl_path_area.setText(f"📐 Diện tích luống: {p_area:,} px²")
                     self.lbl_path_area.setStyleSheet("color: #e0af68; font-size: 12px; font-weight: bold;")
                 else:
-                    self.lbl_path_area.setText("📐 Diện tích: N/A")
+                    self.lbl_path_area.setText("📐 Diện tích luống: N/A")
                     self.lbl_path_area.setStyleSheet("color: #565f89; font-size: 12px;")
-
-            if hasattr(self, "lbl_path_distance"):
-                if getattr(path_res, "distance_m", None) is not None:
-                    d_m = path_res.distance_m
-                    d_s = getattr(path_res, "distance_source", "")
-                    self.lbl_path_distance.setText(f"📏 Khoảng cách: {d_m:.2f} m ({d_s})")
-                    self.lbl_path_distance.setStyleSheet("color: #7dcfff; font-size: 12px; font-weight: bold;")
-                else:
-                    self.lbl_path_distance.setText("📏 Khoảng cách: N/A")
-                    self.lbl_path_distance.setStyleSheet("color: #565f89; font-size: 12px;")
 
             if path_res.lateral_offset_px is not None:
                 deg = abs(path_res.lateral_offset_px) / (fw * 0.5) * 15.0
@@ -1496,11 +1415,8 @@ class CombinedRobotApp(QMainWindow):
             self.lbl_active_nav_source.setText("Mục tiêu hiện tại: ⚪ Mất tín hiệu")
             self.lbl_active_nav_source.setStyleSheet("color: #565f89; font-size: 12px;")
             if hasattr(self, "lbl_path_area"):
-                self.lbl_path_area.setText("📐 Diện tích: 0 px² (Mất luống)")
+                self.lbl_path_area.setText("📐 Diện tích luống: 0 px² (Mất luống)")
                 self.lbl_path_area.setStyleSheet("color: #565f89; font-size: 12px;")
-            if hasattr(self, "lbl_path_distance"):
-                self.lbl_path_distance.setText("📏 Khoảng cách: N/A")
-                self.lbl_path_distance.setStyleSheet("color: #565f89; font-size: 12px;")
             self.lbl_fusion_status.setText("Chế độ hiện tại: ⚪ Mất tín hiệu cả lối đi và QR [BYTE 4 = 0]")
             self.lbl_fusion_status.setStyleSheet("color: #565f89; font-size: 12px;")
             self.lbl_line_state.setText("Trạng thái: Mất đường / Chờ tín hiệu")
@@ -1563,8 +1479,7 @@ class CombinedRobotApp(QMainWindow):
         else:
             if path_res and path_res.bounding_box:
                 _, _, h_bw, h_bh = path_res.bounding_box
-                d_txt = f" | {path_res.distance_m:.2f}m" if getattr(path_res, "distance_m", None) is not None else ""
-                line_stat_short = f"🌿 LINE: {path_res.state.name} ({h_bw*h_bh:,} px²{d_txt})"
+                line_stat_short = f"🌿 LINE: {path_res.state.name} ({h_bw*h_bh:,} px²)"
             else:
                 line_stat_short = f"🌿 LINE: {path_res.state.name if path_res else 'N/A'}"
         qr_count = len([r for r in qr_results if r.is_decoded])
@@ -1822,16 +1737,6 @@ class CombinedRobotApp(QMainWindow):
             self.qr_mission.path_min_height = float(val)
         self._reprocess_current_frame()
 
-    def _on_path_min_dis_changed(self, val: float):
-        if hasattr(self, "qr_mission") and self.qr_mission:
-            self.qr_mission.path_min_distance_m = float(val)
-        self._reprocess_current_frame()
-
-    def _on_path_max_dis_changed(self, val: float):
-        if hasattr(self, "qr_mission") and self.qr_mission:
-            self.qr_mission.path_max_distance_m = float(val)
-        self._reprocess_current_frame()
-
     def _step_forward(self):
         if not self.cap or self.is_camera:
             return
@@ -2064,8 +1969,6 @@ class CombinedRobotApp(QMainWindow):
 
     def closeEvent(self, event):
         self.timer.stop()
-        if hasattr(self, "depth_camera") and self.depth_camera:
-            self.depth_camera.stop()
         if self.is_recording:
             self._stop_recording()
         if hasattr(self, "uart") and self.uart:
