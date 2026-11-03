@@ -255,7 +255,7 @@ class CombinedRobotApp(QMainWindow):
             path_seek_max_angle_deg=20.0,
             delay_turn1_sec=1.0,
             delay_turn2_sec=3.0,
-            confirm_frames=2,
+            confirm_frames=1,
             calib_turn2_stop_only=True
         )
 
@@ -659,7 +659,7 @@ class CombinedRobotApp(QMainWindow):
         lbl_confirm_frames.setStyleSheet("color: #a9b1d6; font-size: 11px;")
         self.spin_confirm_frames = QSpinBox()
         self.spin_confirm_frames.setRange(1, 10)
-        self.spin_confirm_frames.setValue(2)
+        self.spin_confirm_frames.setValue(1)
         self.spin_confirm_frames.setSingleStep(1)
         self.spin_confirm_frames.setSuffix(" f")
         self.spin_confirm_frames.valueChanged.connect(self._on_confirm_frames_changed)
@@ -1249,7 +1249,7 @@ class CombinedRobotApp(QMainWindow):
             self.lbl_active_nav_source.setStyleSheet("color: #bb9af7; font-size: 13px; font-weight: bold;")
             
             if fused_nav.mission_state == QRTurnMissionState.COMPLETED_STOPPED.value:
-                self.lbl_fusion_status.setText(f"🛑 HOÀN TẤT ĐẾN TRẠM TURN_2 [BYTE 4 = 1] ({fused_nav.offset_direction})")
+                self.lbl_fusion_status.setText(f"🛑 HOÀN TẤT ĐẾN TRẠM TURN_2 [BYTE 4 = 2] ({fused_nav.offset_direction})")
                 self.lbl_fusion_status.setStyleSheet("color: #00E676; font-size: 12px; font-weight: bold;")
             elif fused_nav.mission_state == QRTurnMissionState.APPROACHING_TURN2.value:
                 if fused_nav.uart_flag_byte == 2:
@@ -1281,7 +1281,7 @@ class CombinedRobotApp(QMainWindow):
 
             # Tính toán hướng lái đề xuất
             if fused_nav.mission_state == QRTurnMissionState.COMPLETED_STOPPED.value:
-                self.lbl_steering_action.setText("🛑 LỆNH LÁI: DỪNG HOÀN TẤT (Đã đến trạm TURN_2 ≥ 200px)")
+                self.lbl_steering_action.setText("🛑 LỆNH LÁI: DỪNG HOÀN TẤT [B4=2] (Đã xoay xong để kiểm tra đầu xe)")
                 self.lbl_steering_action.setStyleSheet("color: #00E676; font-weight: bold; font-size: 13px;")
             elif fused_nav.mission_state == QRTurnMissionState.APPROACHING_TURN2.value:
                 if fused_nav.uart_flag_byte == 2:
@@ -1394,7 +1394,7 @@ class CombinedRobotApp(QMainWindow):
         stop_badge_map = {
             0: "⚪ B4=0 (CHẠY)",
             1: "🛑 B4=1 (TRẠM TURN_1)",
-            2: "🎉 B4=2 (TÂM TURN_2)",
+            2: "⏸️ B4=2 (DỪNG QUÁN TÍNH / DỪNG HẲN)",
             3: "↩️ B4=3 (XOAY TRÁI TÌM ĐƯỜNG)"
         }
         stop_badge = stop_badge_map.get(fused_nav.uart_flag_byte, f"B4={fused_nav.uart_flag_byte}")

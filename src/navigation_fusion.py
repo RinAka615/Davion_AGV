@@ -270,7 +270,7 @@ class QRTurnMissionManager:
         path_seek_max_angle_deg: float = 20.0,
         delay_turn1_sec: float = 1.0,
         delay_turn2_sec: float = 3.0,
-        confirm_frames: int = 2,
+        confirm_frames: int = 1,
         calib_turn2_stop_only: bool = True,
         **kwargs
     ):
@@ -344,15 +344,21 @@ class QRTurnMissionManager:
         cam_cx = w_img // 2
 
         # -------------------------------------------------------------
-        # TRẠNG THÁI 1: IDLE - Chờ tiếp cận mã TURN_1
+        # TRẠNG THÁI 1: IDLE - Chờ tiếp cận mã TURN_1 hoặc TURN_2
         # -------------------------------------------------------------
         if self.state == QRTurnMissionState.IDLE:
             turn1_stop_qr: Optional[QRDetectionResult] = None
+            turn2_stop_qr: Optional[QRDetectionResult] = None
             for qr in qr_results:
                 if self.is_turn1_code(qr.text):
                     exceeded, bw, bh, area = check_qr_exceeds_threshold(qr, min_dim=self.min_stop_qr_dim)
                     if exceeded:
                         turn1_stop_qr = qr
+                        break
+                elif self.is_turn2_code(qr.text):
+                    exceeded, bw, bh, area = check_qr_exceeds_threshold(qr, min_dim=self.min_stop_qr_dim)
+                    if exceeded:
+                        turn2_stop_qr = qr
                         break
 
             if turn1_stop_qr is not None:
@@ -378,10 +384,33 @@ class QRTurnMissionManager:
                     mission_state=self.state.value,
                     mission_status_desc=self.last_status_desc
                 )
+            elif turn2_stop_qr is not None:
+                # Đã chạm trạm dừng TURN_2 trực tiếp từ IDLE (>= 200px) -> Kích hoạt dừng 500ms & xoay trái tìm đường (B4=3)
+                self.state = QRTurnMissionState.TURNING_RIGHT_SEEK_PATH
+                t_now = time.time() if now is None else now
+                self.turn_right_start_time = t_now
+                self.consecutive_path_frames = 0
+                self.last_status_desc = f"🛑 ĐÃ ĐẾN TRẠM TURN_2 (≥{self.min_stop_qr_dim:.0f}px): DỪNG 500MS & XOAY TRÁI TÌM ĐƯỜNG (B4=3)"
+
+                cx = float(turn2_stop_qr.center[0]) if (hasattr(turn2_stop_qr, "center") and turn2_stop_qr.center) else float(np.mean(turn2_stop_qr.points[:, 0]))
+                cy = float(turn2_stop_qr.center[1]) if (hasattr(turn2_stop_qr, "center") and turn2_stop_qr.center) else float(np.mean(turn2_stop_qr.points[:, 1]))
+                return FusedNavigationTarget(
+                    target_pt=(int(round(cx)), int(round(cy))),
+                    lateral_offset_px=0.0,
+                    offset_direction="Đã đến trạm TURN_2 (Gửi B4=3)",
+                    is_qr_mode=True,
+                    mode_name="TURNING_LEFT_SEEK_PATH",
+                    active_qr=turn2_stop_qr,
+                    ref_y=int(round(cy)),
+                    qr_stop_triggered=False,
+                    uart_flag_byte=3,  # 3 = Đến trạm TURN_2: Dừng 500ms rồi xoay trái tìm đường trên STM32
+                    mission_state=self.state.value,
+                    mission_status_desc=self.last_status_desc
+                )
             else:
                 base_nav.mission_state = self.state.value
                 base_nav.mission_status_desc = self.last_status_desc
-                # Khi ở IDLE và chưa gặp trạm TURN_1 (kể cả vừa auto-reset xong trạm TURN_2):
+                # Khi ở IDLE và chưa gặp trạm TURN_1 hoặc TURN_2 (kể cả vừa auto-reset xong trạm TURN_2):
                 # Đảm bảo cờ gửi STM32 = 0 để xe tự do bám đường chạy tiếp luống mới
                 base_nav.uart_flag_byte = 0
                 base_nav.qr_stop_triggered = False
@@ -672,17 +701,17 @@ class QRTurnMissionManager:
             # DỪNG HẲN XE TUYỆT ĐỐI! KHÔNG BẮT LUỐNG, KHÔNG DÒ ĐƯỜNG, ĐỂ KIỂM TRA ĐẦU XE!
             if getattr(self, "calib_turn2_stop_only", False):
                 self.state = QRTurnMissionState.COMPLETED_STOPPED
-                self.last_status_desc = f"🛑 [CALIB T2] ĐÃ XOAY XONG {self.delay_turn2_sec:.1f}S: DỪNG HẲN ĐỂ XEM ĐẦU ROBOT! (Bấm Reset để thử lại)"
+                self.last_status_desc = f"🛑 [CALIB T2] ĐÃ XOAY XONG {self.delay_turn2_sec:.1f}S: DỪNG HẲN ĐỂ XEM ĐẦU ROBOT! (B4=2, Bấm Reset để thử lại)"
                 return FusedNavigationTarget(
                     target_pt=(cam_cx, h_img // 2),
                     lateral_offset_px=0.0,
-                    offset_direction=f"Calib xong {self.delay_turn2_sec:.1f}s -> Dừng hẳn",
+                    offset_direction=f"Calib xong {self.delay_turn2_sec:.1f}s -> Dừng hẳn (B4=2)",
                     is_qr_mode=False,
                     mode_name="COMPLETED_STOPPED",
                     active_qr=None,
                     ref_y=h_img // 2,
                     qr_stop_triggered=True,
-                    uart_flag_byte=1,  # 1 = Gửi lệnh dừng hẳn tuyệt đối cho STM32
+                    uart_flag_byte=2,  # 2 = Gửi lệnh dừng hẳn xe tuyệt đối (triệt tiêu quán tính quay) cho STM32
                     mission_state=self.state.value,
                     mission_status_desc=self.last_status_desc
                 )
@@ -782,30 +811,21 @@ class QRTurnMissionManager:
             if self.completed_time is None:
                 self.completed_time = t_now
 
-            target_pt = None
+            target_pt = (cam_cx, h_img // 2)
             lat_off = 0.0
             off_dir = "Dừng hẳn"
 
-            if path_res is not None and path_res.state == TrackingState.TRACKING:
-                target_pt = path_res.path_center or path_res.box_center
-                lat_off = path_res.lateral_offset_px or 0.0
-                off_dir = path_res.offset_direction
-            elif base_nav.target_pt:
-                target_pt = base_nav.target_pt
-                lat_off = base_nav.lateral_offset_px or 0.0
-                off_dir = base_nav.offset_direction
-
-            self.last_status_desc = "🛑 ĐÃ HOÀN THÀNH NHIỆM VỤ: DỪNG HẲN (KHÔNG CHẠY BÁM ĐƯỜNG LẠI)"
+            self.last_status_desc = "🛑 ĐÃ HOÀN THÀNH NHIỆM VỤ: DỪNG HẲN (B4=2, KHÔNG CHẠY BÁM ĐƯỜNG LẠI)"
             return FusedNavigationTarget(
                 target_pt=target_pt,
-                lateral_offset_px=lat_off,
-                offset_direction=f"Dừng hoàn tất ({off_dir})",
+                lateral_offset_px=0.0,
+                offset_direction="Dừng hoàn tất (B4=2)",
                 is_qr_mode=False,
                 mode_name="COMPLETED_STOPPED",
                 active_qr=None,
-                ref_y=target_pt[1] if target_pt else (h_img // 2),
+                ref_y=h_img // 2,
                 qr_stop_triggered=True,
-                uart_flag_byte=1,  # 1 = Giữ lệnh dừng hẳn tuyệt đối trên STM32
+                uart_flag_byte=2,  # 2 = Giữ lệnh dừng hẳn tuyệt đối trên STM32 (triệt tiêu toàn bộ đà xoay & tiến)
                 mission_state=self.state.value,
                 mission_status_desc=self.last_status_desc
             )
