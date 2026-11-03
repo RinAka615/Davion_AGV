@@ -283,6 +283,8 @@ class QRTurnMissionManager:
         self.center_locked_time: Optional[float] = None
         self.turn_right_start_time: Optional[float] = None
         self.completed_time: Optional[float] = None
+        self.last_turn2_offset: float = 0.0
+        self.last_turn2_seen_time: Optional[float] = None
         self.consecutive_path_frames: int = 0
         self.min_path_confirm_frames: int = kwargs.get("min_path_confirm_frames", 2)
         self.is_enabled = True
@@ -294,6 +296,8 @@ class QRTurnMissionManager:
         self.center_locked_time = None
         self.turn_right_start_time = None
         self.completed_time = None
+        self.last_turn2_offset = 0.0
+        self.last_turn2_seen_time = None
         self.consecutive_path_frames = 0
 
     @staticmethod
@@ -390,6 +394,9 @@ class QRTurnMissionManager:
                 offset_px = float(cx - cam_cx)
                 target_pt = (int(round(cx)), int(round(cy)))
                 is_centered = abs(offset_px) <= self.align_tolerance_px
+                t_now = time.time() if now is None else now
+                self.last_turn2_offset = offset_px
+                self.last_turn2_seen_time = t_now
 
                 if is_centered:
                     # BẮT TRÚNG TÂM TURN_2 -> CHUYỂN SANG TIẾP CẬN TURN_2 (APPROACHING_TURN2)!
@@ -480,7 +487,10 @@ class QRTurnMissionManager:
             t_now = time.time() if now is None else now
             dt_pause = t_now - (self.center_locked_time if self.center_locked_time is not None else t_now)
 
+            # Ưu tiên mã có text TURN_2 hoặc box AI (hoặc bất kỳ mã QR nào không phải là TURN_1)
             turn2_found = next((qr for qr in qr_results if self.is_turn2_code(qr.text) or (qr.backend == "yolo-fastestv2-qr" and not self.is_turn1_code(qr.text))), None)
+            if turn2_found is None:
+                turn2_found = next((qr for qr in qr_results if not self.is_turn1_code(qr.text)), None)
 
             if turn2_found is not None:
                 if hasattr(turn2_found, "center") and turn2_found.center and (turn2_found.center[0] != 0.0 or turn2_found.center[1] != 0.0):
@@ -491,6 +501,9 @@ class QRTurnMissionManager:
 
                 offset_px = float(cx - cam_cx)
                 target_pt = (int(round(cx)), int(round(cy)))
+                self.last_turn2_offset = offset_px
+                self.last_turn2_seen_time = t_now
+
                 exceeded_stop, bw, bh, area = check_qr_exceeds_threshold(turn2_found, min_dim=self.min_stop_qr_dim)
 
                 if exceeded_stop:
@@ -540,13 +553,21 @@ class QRTurnMissionManager:
                         mission_status_desc=self.last_status_desc
                     )
             else:
-                # Tạm thời mất dấu TURN_2 do rung lắc
+                # Tạm thời mất dấu TURN_2 do rung lắc xe khi bắt đầu tăng tốc:
+                # Giữ nguyên độ lệch tâm gần nhất (trong vòng 1.2s) để xe không bị giật lái về 0!
                 flag_to_send = 2 if dt_pause < self.pause_center_sec else 0
-                self.last_status_desc = f"🚀 TIẾN THẲNG THEO HƯỚNG TURN_2 (Tạm mất dấu)..."
+                time_since_seen = (t_now - self.last_turn2_seen_time) if self.last_turn2_seen_time is not None else 999.0
+                if time_since_seen <= 1.2:
+                    offset_to_use = self.last_turn2_offset
+                    self.last_status_desc = f"🚀 TIẾN THEO TÂM TURN_2 (Giữ tâm {offset_to_use:+.1f}px, rung lắc {time_since_seen:.1f}s)..."
+                else:
+                    offset_to_use = 0.0
+                    self.last_status_desc = f"🚀 TIẾN THẲNG THEO HƯỚNG TURN_2 (Mất dấu >1.2s)..."
+
                 return FusedNavigationTarget(
-                    target_pt=(cam_cx, h_img // 2),
-                    lateral_offset_px=0.0,
-                    offset_direction="Tiến thẳng theo hướng TURN_2",
+                    target_pt=(int(round(cam_cx + offset_to_use)), h_img // 2),
+                    lateral_offset_px=offset_to_use,
+                    offset_direction=f"Tiến theo tâm TURN_2 ({offset_to_use:+.1f} px)",
                     is_qr_mode=True,
                     mode_name="APPROACHING_TURN2",
                     active_qr=None,
