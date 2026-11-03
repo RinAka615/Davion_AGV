@@ -1292,7 +1292,7 @@ class CombinedRobotApp(QMainWindow):
                 self.lbl_mission_status.setStyleSheet("color: #ff9e64; font-weight: bold; font-size: 13px;")
             elif fused_nav.mission_state == QRTurnMissionState.TURNING_LEFT_SEEK_TURN2.value:
                 self.lbl_mission_status.setStyleSheet("color: #bb9af7; font-weight: bold; font-size: 13px;")
-            elif fused_nav.mission_state == QRTurnMissionState.APPROACHING_TURN2.value:
+            elif fused_nav.mission_state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH.value:
                 self.lbl_mission_status.setStyleSheet("color: #7dcfff; font-weight: bold; font-size: 13px;")
             elif fused_nav.mission_state == QRTurnMissionState.COMPLETED_STOPPED.value:
                 self.lbl_mission_status.setStyleSheet("color: #00E676; font-weight: bold; font-size: 13px;")
@@ -1307,13 +1307,9 @@ class CombinedRobotApp(QMainWindow):
             if fused_nav.mission_state == QRTurnMissionState.COMPLETED_STOPPED.value:
                 self.lbl_fusion_status.setText(f"🛑 CALIB T2: ĐÃ DỪNG HẲN [BYTE 4 = {fused_nav.uart_flag_byte}] ({fused_nav.offset_direction})")
                 self.lbl_fusion_status.setStyleSheet("color: #00E676; font-size: 12px; font-weight: bold;")
-            elif fused_nav.mission_state == QRTurnMissionState.APPROACHING_TURN2.value:
-                if fused_nav.uart_flag_byte == 2:
-                    self.lbl_fusion_status.setText(f"⏸️ TẠM DỪNG 500MS TRIỆT TIÊU QUÁN TÍNH [BYTE 4 = 2] ({fused_nav.offset_direction})")
-                    self.lbl_fusion_status.setStyleSheet("color: #ff9e64; font-size: 12px; font-weight: bold;")
-                else:
-                    self.lbl_fusion_status.setText(f"🚀 TIẾN THEO TÂM TURN_2 [BYTE 4 = 0]: {fused_nav.qr_bbox_dim[0]:.0f}×{fused_nav.qr_bbox_dim[1]:.0f} px")
-                    self.lbl_fusion_status.setStyleSheet("color: #7dcfff; font-size: 12px; font-weight: bold;")
+            elif fused_nav.mission_state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH.value:
+                self.lbl_fusion_status.setText(f"🔄 XOAY TÌM LUỐNG [BYTE 4 = {fused_nav.uart_flag_byte}] ({fused_nav.offset_direction})")
+                self.lbl_fusion_status.setStyleSheet("color: #7dcfff; font-size: 12px; font-weight: bold;")
             elif fused_nav.qr_stop_triggered:
                 if fused_nav.uart_flag_byte == 2:
                     self.lbl_fusion_status.setText(f"🎉 ĐÃ BẮT TÂM TURN_2 [BYTE 4 = 2] ({fused_nav.offset_direction})")
