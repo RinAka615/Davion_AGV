@@ -503,6 +503,54 @@ def test_method_3_path_seek_with_offset_and_heading_angle():
     print("[PASS] test_method_3_path_seek_with_offset_and_heading_angle: Method 3 (Dual condition: |offset|<=200px AND |angle|<=20deg) 100% verified!")
 
 
+def test_turn2_detection_during_rotation_stops_and_approaches():
+    """Kiểm tra trường hợp thực tế khi đang xoay tìm TURN_2:
+    - YOLO phát hiện QR box ở vị trí cx=516 (lệch -124px trên khung 1280x720)
+    - Do xe đang xoay, text QR chưa giải mã hoặc text cũ là TURN_1
+    - Hệ thống vẫn nhận diện đúng TURN_2, thỏa mãn align_tolerance_px=180px
+    - Gửi Byte 4 = 2 (dừng 500ms) rồi chuyển sang tiến theo tâm với Byte 4 = 0
+    """
+    frame_shape = (720, 1280) # cam_cx = 640
+    mission = QRTurnMissionManager(align_tolerance_px=180.0)
+    mission.state = QRTurnMissionState.TURNING_LEFT_SEEK_TURN2
+
+    # Giả lập box phát hiện từ YOLO khi xe đang quay nhòe
+    pts = np.array([[492.0, 353.0], [540.0, 353.0], [540.0, 402.0], [492.0, 402.0]], dtype=np.float32)
+    qr_ai = QRDetectionResult(
+        points=pts,
+        text="TURN_2",
+        is_decoded=True,
+        backend="yolo-fastestv2-qr",
+        center=(516.0, 377.5),
+        center_int=(516, 377),
+        width_px=48.0,
+        height_px=49.0,
+        area_px=2352.0,
+        aspect_ratio=0.98,
+        orientation_deg=0.0
+    )
+
+    base_nav = FusedNavigationTarget(None, 0.0, '', False, 'IDLE', None, (0, 0), 0.0, 0, False, 0)
+
+    # 1. Khung hình phát hiện: Bắt tâm (lệch -124px <= 180px) -> Chuyển sang APPROACHING_TURN2 và gửi B4 = 2
+    res1 = mission.process(base_nav, [qr_ai], frame_shape, now=10.0)
+    assert mission.state == QRTurnMissionState.APPROACHING_TURN2
+    assert res1.uart_flag_byte == 2, f"Expected B4=2 (dừng 500ms triệt tiêu quán tính quay), got {res1.uart_flag_byte}"
+    assert abs(res1.lateral_offset_px - (-124.0)) < 1e-3
+
+    # 2. Trong 500ms dừng (now = 10.3s): Duy trì B4 = 2
+    res2 = mission.process(base_nav, [qr_ai], frame_shape, now=10.3)
+    assert res2.uart_flag_byte == 2
+
+    # 3. Hết 500ms dừng (now = 10.7s): Gửi B4 = 0 để xe tiến theo tâm TURN_2 qua PID
+    res3 = mission.process(base_nav, [qr_ai], frame_shape, now=10.7)
+    assert mission.state == QRTurnMissionState.APPROACHING_TURN2
+    assert res3.uart_flag_byte == 0, f"Expected B4=0 (tiến theo tâm TURN_2), got {res3.uart_flag_byte}"
+    assert abs(res3.lateral_offset_px - (-124.0)) < 1e-3
+
+    print("[PASS] test_turn2_detection_during_rotation_stops_and_approaches: Detection -> Stop 500ms (B4=2) -> Approach Center (B4=0) 100% verified!")
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("RUNNING AUTOMATED TEST SUITE FOR NAVIGATION FUSION")
@@ -518,7 +566,8 @@ if __name__ == "__main__":
     test_uart_packet_multimode_flags()
     test_qr_turn_mission_lifecycle()
     test_method_3_path_seek_with_offset_and_heading_angle()
+    test_turn2_detection_during_rotation_stops_and_approaches()
     print("=" * 60)
-    print("ALL 11 NAVIGATION FUSION TESTS PASSED 100%!")
+    print("ALL 12 NAVIGATION FUSION TESTS PASSED 100%!")
     print("=" * 60)
 

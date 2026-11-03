@@ -263,7 +263,7 @@ class QRTurnMissionManager:
         self,
         stop_duration_sec: float = 1.0,
         pause_center_sec: float = 0.5,
-        align_tolerance_px: float = 100.0, # Biến offset để bắt tâm
+        align_tolerance_px: float = 180.0, # Biến offset để bắt tâm (mặc định ±180px trên khung 1280px)
         min_stop_qr_dim: float = 200.0,
         auto_reset_delay_sec: float = 3.0,
         path_seek_tolerance_px: float = 200.0,
@@ -375,7 +375,7 @@ class QRTurnMissionManager:
         if self.state == QRTurnMissionState.TURNING_LEFT_SEEK_TURN2:
             turn2_found: Optional[QRDetectionResult] = None
             for qr in qr_results:
-                if self.is_turn2_code(qr.text):
+                if self.is_turn2_code(qr.text) or (qr.backend == "yolo-fastestv2-qr" and not self.is_turn1_code(qr.text)):
                     turn2_found = qr
                     break
 
@@ -480,7 +480,7 @@ class QRTurnMissionManager:
             t_now = time.time() if now is None else now
             dt_pause = t_now - (self.center_locked_time if self.center_locked_time is not None else t_now)
 
-            turn2_found = next((qr for qr in qr_results if self.is_turn2_code(qr.text)), None)
+            turn2_found = next((qr for qr in qr_results if self.is_turn2_code(qr.text) or (qr.backend == "yolo-fastestv2-qr" and not self.is_turn1_code(qr.text))), None)
 
             if turn2_found is not None:
                 if hasattr(turn2_found, "center") and turn2_found.center and (turn2_found.center[0] != 0.0 or turn2_found.center[1] != 0.0):

@@ -248,7 +248,7 @@ class CombinedRobotApp(QMainWindow):
         # --- 4. MÁY TRẠNG THÁI NHIỆM VỤ CHUYỂN HƯỚNG QR (TURN 1 -> TURN 2) ---
         self.qr_mission = QRTurnMissionManager(
             stop_duration_sec=1.0,
-            align_tolerance_px=100.0,
+            align_tolerance_px=180.0,
             min_stop_qr_dim=200.0,
             auto_reset_delay_sec=3.0,
             path_seek_tolerance_px=200.0,
@@ -597,7 +597,7 @@ class CombinedRobotApp(QMainWindow):
         lbl_align_tol.setStyleSheet("color: #a9b1d6; font-size: 11px;")
         self.spin_align_tol = QSpinBox()
         self.spin_align_tol.setRange(20, 300)
-        self.spin_align_tol.setValue(100)
+        self.spin_align_tol.setValue(180)
         self.spin_align_tol.setSingleStep(5)
         self.spin_align_tol.setSuffix(" px")
         self.spin_align_tol.valueChanged.connect(self._on_align_tol_changed)
@@ -1130,6 +1130,10 @@ class CombinedRobotApp(QMainWindow):
                 self.qr_mission.path_seek_tolerance_px = float(self.spin_path_seek_tol.value())
             if hasattr(self, "spin_path_seek_angle"):
                 self.qr_mission.path_seek_max_angle_deg = float(self.spin_path_seek_angle.value())
+            if self.qr_mission.state == QRTurnMissionState.TURNING_LEFT_SEEK_TURN2:
+                if hasattr(self, "qr_detector") and hasattr(self.qr_detector, "last_decoded_text"):
+                    if self.qr_detector.last_decoded_text and "TURN_1" in self.qr_detector.last_decoded_text.upper():
+                        self.qr_detector.last_decoded_text = "TURN_2"
             fused_nav = self.qr_mission.process(
                 base_nav=fused_nav,
                 qr_results=qr_results,
@@ -1520,6 +1524,8 @@ class CombinedRobotApp(QMainWindow):
     def _reset_qr_mission(self):
         if hasattr(self, "qr_mission"):
             self.qr_mission.reset()
+        if hasattr(self, "qr_detector") and hasattr(self.qr_detector, "reset_last_decoded_text"):
+            self.qr_detector.reset_last_decoded_text("TURN_2")
         if hasattr(self, "lbl_mission_status"):
             self.lbl_mission_status.setText("Nhiệm vụ QR: Đã reset (Chờ tiếp cận mã TURN_1)")
             self.lbl_mission_status.setStyleSheet("color: #7dcfff; font-size: 12px; font-weight: bold;")

@@ -69,6 +69,10 @@ class QRDetector:
             self.zxing_formats = []
         self.last_decoded_text: str = "TURN_2"
 
+    def reset_last_decoded_text(self, default_text: str = "TURN_2") -> None:
+        """Đặt lại chuỗi mã QR ghi nhớ gần nhất khi chuyển pha nhiệm vụ (ví dụ xoay từ TURN_1 sang TURN_2)."""
+        self.last_decoded_text = default_text
+
     def detect_and_decode(
         self,
         frame: np.ndarray,
@@ -159,7 +163,13 @@ class QRDetector:
 
                 # Nếu giải mã được từ ROI làm nét HOẶC xác suất AI YOLO-Fastest V2 cao (đang quay nhòe)
                 if decoded_from_roi or q_conf >= 0.48:
-                    qr_text = decoded_from_roi or self.last_decoded_text or "TURN_2"
+                    if decoded_from_roi:
+                        qr_text = decoded_from_roi
+                    elif self.last_decoded_text and "TURN_1" not in self.last_decoded_text.upper():
+                        qr_text = self.last_decoded_text
+                    else:
+                        # Khi xe đang xoay tìm trạm mới (hoặc text trước là TURN_1), nhãn dự đoán chuyển hướng là TURN_2
+                        qr_text = "TURN_2"
                     results.append(QRDetectionResult(
                         points=pts_ordered,
                         text=qr_text,
