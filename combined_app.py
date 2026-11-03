@@ -196,8 +196,13 @@ class CombinedRobotApp(QMainWindow):
     def __init__(self, initial_video: Optional[str] = None, initial_uart: bool = False):
         super().__init__()
         self.setWindowTitle("Robot Nông Nghiệp: Hệ Thống Tích Hợp Dò Đường & Quét Mã QR")
-        self.resize(1260, 700)
-        self.setMinimumSize(920, 520)
+        screen = QApplication.primaryScreen()
+        if screen:
+            avail = screen.availableGeometry()
+            self.resize(min(avail.width(), 1280), min(avail.height(), 720))
+        else:
+            self.resize(1200, 680)
+        self.setMinimumSize(880, 480)
         self.setStyleSheet(COMBINED_STYLESHEET)
 
         # Trạng thái capture & video
@@ -584,10 +589,9 @@ class CombinedRobotApp(QMainWindow):
         self.lbl_mission_status.setStyleSheet("color: #7dcfff; font-size: 11px; font-weight: bold;")
         grp_mission_layout.addWidget(self.lbl_mission_status)
 
-        # 4 thông số cấu hình nhiệm vụ xếp dạng lưới 2x2 gọn gàng
-        grid_mission = QGridLayout()
-        grid_mission.setHorizontalSpacing(8)
-        grid_mission.setVerticalSpacing(3)
+        # Các thông số nhiệm vụ xếp trên 1 dòng ngang gọn gàng
+        row_mission_params = QHBoxLayout()
+        row_mission_params.setSpacing(6)
 
         lbl_align_tol = QLabel("🎯 Tâm TURN_2:")
         lbl_align_tol.setStyleSheet("color: #a9b1d6; font-size: 11px;")
@@ -598,7 +602,7 @@ class CombinedRobotApp(QMainWindow):
         self.spin_align_tol.setSuffix(" px")
         self.spin_align_tol.valueChanged.connect(self._on_align_tol_changed)
 
-        lbl_path_tol = QLabel("🌱 Bắt luống mới:")
+        lbl_path_tol = QLabel("🌱 Bắt luống:")
         lbl_path_tol.setStyleSheet("color: #a9b1d6; font-size: 11px;")
         self.spin_path_seek_tol = QSpinBox()
         self.spin_path_seek_tol.setRange(50, 500)
@@ -606,15 +610,6 @@ class CombinedRobotApp(QMainWindow):
         self.spin_path_seek_tol.setSingleStep(10)
         self.spin_path_seek_tol.setSuffix(" px")
         self.spin_path_seek_tol.valueChanged.connect(self._on_path_seek_tol_changed)
-
-        lbl_path_angle = QLabel("📐 Góc luống:")
-        lbl_path_angle.setStyleSheet("color: #a9b1d6; font-size: 11px;")
-        self.spin_path_seek_angle = QSpinBox()
-        self.spin_path_seek_angle.setRange(5, 60)
-        self.spin_path_seek_angle.setValue(20)
-        self.spin_path_seek_angle.setSingleStep(1)
-        self.spin_path_seek_angle.setSuffix(" °")
-        self.spin_path_seek_angle.valueChanged.connect(self._on_path_seek_angle_changed)
 
         lbl_auto_reset = QLabel("⏱️ Tự Reset:")
         lbl_auto_reset.setStyleSheet("color: #a9b1d6; font-size: 11px;")
@@ -625,17 +620,14 @@ class CombinedRobotApp(QMainWindow):
         self.spin_auto_reset.setSuffix(" s")
         self.spin_auto_reset.valueChanged.connect(self._on_auto_reset_changed)
 
-        grid_mission.addWidget(lbl_align_tol, 0, 0)
-        grid_mission.addWidget(self.spin_align_tol, 0, 1)
-        grid_mission.addWidget(lbl_path_tol, 0, 2)
-        grid_mission.addWidget(self.spin_path_seek_tol, 0, 3)
+        row_mission_params.addWidget(lbl_align_tol)
+        row_mission_params.addWidget(self.spin_align_tol)
+        row_mission_params.addWidget(lbl_path_tol)
+        row_mission_params.addWidget(self.spin_path_seek_tol)
+        row_mission_params.addWidget(lbl_auto_reset)
+        row_mission_params.addWidget(self.spin_auto_reset)
 
-        grid_mission.addWidget(lbl_path_angle, 1, 0)
-        grid_mission.addWidget(self.spin_path_seek_angle, 1, 1)
-        grid_mission.addWidget(lbl_auto_reset, 1, 2)
-        grid_mission.addWidget(self.spin_auto_reset, 1, 3)
-
-        grp_mission_layout.addLayout(grid_mission)
+        grp_mission_layout.addLayout(row_mission_params)
 
         self.btn_reset_mission = QPushButton("🔄 Reset Thủ Công (Dự phòng)")
         self.btn_reset_mission.setStyleSheet("""
@@ -1791,7 +1783,8 @@ def main():
             initial_vid = arg
 
     gui = CombinedRobotApp(initial_video=initial_vid, initial_uart=initial_uart)
-    gui.show()
+    # Tự động mở cửa sổ vừa khít toàn màn hình (Fit to screen)
+    gui.showMaximized()
     sys.exit(app.exec_())
 
 
