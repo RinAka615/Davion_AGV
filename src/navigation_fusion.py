@@ -269,9 +269,11 @@ class QRTurnMissionManager:
         path_seek_tolerance_px: float = 200.0,
         path_seek_max_angle_deg: float = 20.0,
         delay_turn1_sec: float = 1.0,
-        delay_turn2_sec: float = 3.0,
+        delay_turn2_sec: float = 0.3,
         confirm_frames: int = 1,
         calib_turn2_stop_only: bool = True,
+        path_min_area: float = 30000.0,
+        path_min_height: float = 150.0,
         **kwargs
     ):
         self.stop_duration_sec = stop_duration_sec
@@ -286,6 +288,8 @@ class QRTurnMissionManager:
         self.confirm_frames = int(kwargs.get("confirm_frames", confirm_frames))
         self.min_path_confirm_frames = int(kwargs.get("min_path_confirm_frames", self.confirm_frames))
         self.calib_turn2_stop_only = bool(kwargs.get("calib_turn2_stop_only", calib_turn2_stop_only))
+        self.path_min_area = float(kwargs.get("path_min_area", path_min_area))
+        self.path_min_height = float(kwargs.get("path_min_height", path_min_height))
 
         self.state = QRTurnMissionState.IDLE
         self.last_status_desc = "Sẵn sàng (Chờ tiếp cận mã TURN_1)"
@@ -718,18 +722,32 @@ class QRTurnMissionManager:
                 )
 
             # 3. Sau delay_turn2_sec (chế độ chạy thường): STM32 đang xoay trái tìm đường (cmd_r = +TURN_SPEED)
-            # CÁCH 3: Kiểm tra ĐỒNG THỜI cả Vị trí tâm luống (|offset| <= 200px) VÀ Góc nghiêng (|angle| <= 20 độ)
+            # Kiểm tra ĐỒNG THỜI 4 tiêu chí hình học để nhận diện đúng Luống Thật:
+            # 1. Vị trí tâm luống (|offset| <= path_seek_tolerance_px, mặc định 200px)
+            # 2. Góc nghiêng (|angle| <= path_seek_max_angle_deg, mặc định 20 độ)
+            # 3. DIỆN TÍCH LUỐNG TỐI THIỂU: S = bw * bh >= path_min_area (mặc định 30,000 px², loại bỏ rác/nhiễu sàn)
+            # 4. CHIỀU CAO LUỐNG TỐI THIỂU: bh >= path_min_height (mặc định 150 px, đảm bảo luống dài kéo sâu vào lòng đường)
             has_path = False
             cur_offset: Optional[float] = None
             cur_angle: float = 0.0
+            cur_area: float = 0.0
+            cur_height: float = 0.0
 
             if path_res is not None and path_res.state == TrackingState.TRACKING:
                 cur_offset = path_res.lateral_offset_px
                 cur_angle = calculate_path_heading_angle(path_res) or 0.0
+                if path_res.bounding_box is not None:
+                    _, _, bw, bh = path_res.bounding_box
+                    cur_area = float(bw * bh)
+                    cur_height = float(bh)
+
                 if cur_offset is not None:
                     is_offset_ok = abs(cur_offset) <= self.path_seek_tolerance_px
                     is_angle_ok = abs(cur_angle) <= self.path_seek_max_angle_deg
-                    if is_offset_ok and is_angle_ok:
+                    is_area_ok = (cur_area >= self.path_min_area) if getattr(self, "path_min_area", 0) > 0 else True
+                    is_height_ok = (cur_height >= self.path_min_height) if getattr(self, "path_min_height", 0) > 0 else True
+
+                    if is_offset_ok and is_angle_ok and is_area_ok and is_height_ok:
                         has_path = True
             elif base_nav.mode_name == "PATH_LINE" and base_nav.target_pt is not None:
                 cur_offset = base_nav.lateral_offset_px
@@ -744,7 +762,7 @@ class QRTurnMissionManager:
                 self.consecutive_path_frames = 0
 
             if self.consecutive_path_frames >= min_confirm:
-                # ĐÃ DETECT ĐƯỢC LUỐNG ĐƯỜNG MỚI THỎA MÃN CẢ VỊ TRÍ VÀ GÓC NGHIÊNG:
+                # ĐÃ DETECT ĐƯỢC LUỐNG ĐƯỜNG MỚI THỎA MÃN CẢ DIỆN TÍCH, VỊ TRÍ VÀ GÓC NGHIÊNG:
                 # BẮT ĐẦU CHẠY BÁM LUỐNG MỚI!
                 # Tầng Python chỉ ưu tiên truyền nhận: reset trạng thái về IDLE và gửi B4 = 0
                 # STM32 sẽ tự động dừng 500ms (STM_QR_PAUSE_PATH_500MS) để triệt tiêu quán tính xoay,
@@ -752,7 +770,8 @@ class QRTurnMissionManager:
                 self.reset()
                 off_txt = f"|off|={abs(cur_offset):.0f}px≤{self.path_seek_tolerance_px:.0f}" if cur_offset is not None else ""
                 ang_txt = f"|góc|={abs(cur_angle):.1f}°≤{self.path_seek_max_angle_deg:.0f}°"
-                self.last_status_desc = f"🌿 ĐÃ BẮT TRÚNG TIM LUỐNG ({off_txt}, {ang_txt}): BẮT ĐẦU CHẠY BÁM LUỐNG MỚI!"
+                area_txt = f"S={int(cur_area):,}px²" if cur_area > 0 else ""
+                self.last_status_desc = f"🌿 ĐÃ BẮT TRÚNG LUỐNG CHUẨN ({area_txt}, {off_txt}, {ang_txt}): BẮT ĐẦU CHẠY BÁM LUỐNG MỚI!"
 
                 if path_res is not None and path_res.state == TrackingState.TRACKING:
                     target_pt = path_res.path_center or path_res.box_center
@@ -802,10 +821,11 @@ class QRTurnMissionManager:
                         mission_status_desc=self.last_status_desc
                     )
 
-                # Chưa thỏa mãn điều kiện (chưa thấy luống HOẶC lệch > 200px HOẶC góc chéo > 20 độ)
+                # Chưa thỏa mãn điều kiện (chưa thấy luống HOẶC lệch > 200px HOẶC góc chéo > 20 độ HOẶC diện tích < path_min_area)
                 # -> Tiếp tục xoay trái tìm đường (Gửi B4 = 3)
                 if cur_offset is not None:
-                    desc_detail = f"|off|={abs(cur_offset):.0f}/{self.path_seek_tolerance_px:.0f}px, |góc|={abs(cur_angle):.1f}/{self.path_seek_max_angle_deg:.0f}°"
+                    area_info = f", S={int(cur_area):,}/{int(getattr(self, 'path_min_area', 0)):,}px²" if getattr(self, "path_min_area", 0) > 0 else ""
+                    desc_detail = f"|off|={abs(cur_offset):.0f}/{self.path_seek_tolerance_px:.0f}px, |góc|={abs(cur_angle):.1f}/{self.path_seek_max_angle_deg:.0f}°{area_info}"
                     self.last_status_desc = f"↩️ ĐANG XOAY VÀO TIM LUỐNG ({desc_detail})..."
                 else:
                     self.last_status_desc = "↩️ STM32 ĐANG XOAY TRÁI TÌM LỐI ĐI/ĐƯỜNG MỚI (Đang dò đường)..."

@@ -254,9 +254,11 @@ class CombinedRobotApp(QMainWindow):
             path_seek_tolerance_px=200.0,
             path_seek_max_angle_deg=20.0,
             delay_turn1_sec=1.0,
-            delay_turn2_sec=3.0,
+            delay_turn2_sec=0.3,
             confirm_frames=1,
-            calib_turn2_stop_only=True
+            calib_turn2_stop_only=False,
+            path_min_area=30000.0,
+            path_min_height=150.0
         )
 
         self._init_ui()
@@ -650,7 +652,7 @@ class CombinedRobotApp(QMainWindow):
         lbl_delay_turn2.setStyleSheet("color: #a9b1d6; font-size: 11px;")
         self.spin_delay_turn2 = QDoubleSpinBox()
         self.spin_delay_turn2.setRange(0.0, 10.0)
-        self.spin_delay_turn2.setValue(3.0)
+        self.spin_delay_turn2.setValue(0.3)
         self.spin_delay_turn2.setSingleStep(0.1)
         self.spin_delay_turn2.setSuffix(" s")
         self.spin_delay_turn2.valueChanged.connect(self._on_delay_turn2_changed)
@@ -673,8 +675,37 @@ class CombinedRobotApp(QMainWindow):
 
         grp_mission_layout.addLayout(row_mission_params_2)
 
+        # Hàng 3: Điều kiện lọc Luống Thật (Diện tích tối thiểu, Chiều cao tối thiểu)
+        row_mission_params_3 = QHBoxLayout()
+        row_mission_params_3.setSpacing(6)
+
+        lbl_min_area = QLabel("📐 Min Area:")
+        lbl_min_area.setStyleSheet("color: #a9b1d6; font-size: 11px;")
+        self.spin_path_min_area = QSpinBox()
+        self.spin_path_min_area.setRange(0, 300000)
+        self.spin_path_min_area.setValue(30000)
+        self.spin_path_min_area.setSingleStep(5000)
+        self.spin_path_min_area.setSuffix(" px²")
+        self.spin_path_min_area.valueChanged.connect(self._on_path_min_area_changed)
+
+        lbl_min_height = QLabel("📏 Min Cao:")
+        lbl_min_height.setStyleSheet("color: #a9b1d6; font-size: 11px;")
+        self.spin_path_min_height = QSpinBox()
+        self.spin_path_min_height.setRange(0, 600)
+        self.spin_path_min_height.setValue(150)
+        self.spin_path_min_height.setSingleStep(10)
+        self.spin_path_min_height.setSuffix(" px")
+        self.spin_path_min_height.valueChanged.connect(self._on_path_min_height_changed)
+
+        row_mission_params_3.addWidget(lbl_min_area)
+        row_mission_params_3.addWidget(self.spin_path_min_area)
+        row_mission_params_3.addWidget(lbl_min_height)
+        row_mission_params_3.addWidget(self.spin_path_min_height)
+
+        grp_mission_layout.addLayout(row_mission_params_3)
+
         self.chk_calib_turn2 = QCheckBox("🎯 Chế độ Calib T2 (Xoay xong dừng hẳn, không bắt luống)")
-        self.chk_calib_turn2.setChecked(True)
+        self.chk_calib_turn2.setChecked(False)
         self.chk_calib_turn2.setStyleSheet("color: #ff9e64; font-weight: bold; font-size: 11px;")
         self.chk_calib_turn2.stateChanged.connect(self._on_calib_turn2_changed)
         grp_mission_layout.addWidget(self.chk_calib_turn2)
@@ -1189,6 +1220,10 @@ class CombinedRobotApp(QMainWindow):
                 self.qr_mission.min_path_confirm_frames = int(self.spin_confirm_frames.value())
             if hasattr(self, "chk_calib_turn2"):
                 self.qr_mission.calib_turn2_stop_only = self.chk_calib_turn2.isChecked()
+            if hasattr(self, "spin_path_min_area"):
+                self.qr_mission.path_min_area = float(self.spin_path_min_area.value())
+            if hasattr(self, "spin_path_min_height"):
+                self.qr_mission.path_min_height = float(self.spin_path_min_height.value())
             if self.qr_mission.state == QRTurnMissionState.TURNING_LEFT_SEEK_TURN2:
                 if hasattr(self, "qr_detector") and hasattr(self.qr_detector, "last_decoded_text"):
                     if self.qr_detector.last_decoded_text and "TURN_1" in self.qr_detector.last_decoded_text.upper():
@@ -1646,6 +1681,16 @@ class CombinedRobotApp(QMainWindow):
     def _on_calib_turn2_changed(self, state: int):
         if hasattr(self, "qr_mission") and self.qr_mission:
             self.qr_mission.calib_turn2_stop_only = bool(state == Qt.Checked)
+
+    def _on_path_min_area_changed(self, val: int):
+        if hasattr(self, "qr_mission") and self.qr_mission:
+            self.qr_mission.path_min_area = float(val)
+        self._reprocess_current_frame()
+
+    def _on_path_min_height_changed(self, val: int):
+        if hasattr(self, "qr_mission") and self.qr_mission:
+            self.qr_mission.path_min_height = float(val)
+        self._reprocess_current_frame()
 
     def _step_forward(self):
         if not self.cap or self.is_camera:

@@ -6,6 +6,7 @@ When QR code bounding area > 60x60, lateral offset is calculated based on QR cen
 
 import os
 import sys
+from typing import Optional, Tuple
 import numpy as np
 
 # Thêm root vào sys.path
@@ -57,7 +58,8 @@ def create_mock_qr(
 def create_mock_path_result(
     path_center_x: int = 320,
     ref_y: int = 400,
-    offset_px: float = 0.0
+    offset_px: float = 0.0,
+    bounding_box: Optional[Tuple[int, int, int, int]] = (100, 200, 300, 300)
 ) -> DetectionResult:
     """Tạo đối tượng DetectionResult giả lập cho bám đường (Path Tracking)."""
     return DetectionResult(
@@ -66,6 +68,7 @@ def create_mock_path_result(
         lateral_offset_px=offset_px,
         offset_direction="Đúng tâm (0 px)" if abs(offset_px) <= 3 else f"Lệch {'phải' if offset_px > 0 else 'trái'} {abs(offset_px):.1f} px",
         ref_y_global=ref_y,
+        bounding_box=bounding_box,
         path_center=(path_center_x, ref_y),
         box_center=(path_center_x, ref_y),
         center_method="path"
@@ -743,6 +746,62 @@ def test_idle_direct_turn2_station_trigger():
     print("[PASS] test_idle_direct_turn2_station_trigger: Direct TURN_2 trigger in IDLE -> 3.0s turn -> Stop completely verified!")
 
 
+def test_path_detection_by_min_area_and_height():
+    """Kiểm tra tính năng nhận diện luống dựa trên diện tích (Min Area) và chiều cao (Min Height) không cần delay cố định:
+    1. Khi vệt đường nhỏ (rác/nhiễu sàn, S = 80x80 = 6400 < 30000 px², H = 80 < 150):
+       -> Tiếp tục xoay trái (B4=3), không nhận nhầm luống!
+    2. Khi vệt đường ngắn (S = 400x60 = 24000 < 30000 px², H = 60 < 150):
+       -> Tiếp tục xoay trái (B4=3).
+    3. Khi luống thật xuất hiện (S = 350x300 = 105,000 >= 30,000 px², H = 300 >= 150, |offset| <= 200px):
+       -> Khóa trúng luống mới ngay lập tức (B4=0, mode=PATH_LINE, state=IDLE) mà không cần chờ delay!
+    """
+    frame_shape = (720, 1280)
+    mission = QRTurnMissionManager(
+        delay_turn2_sec=0.0,  # Không cần trễ thời gian!
+        confirm_frames=1,
+        calib_turn2_stop_only=False,
+        path_min_area=30000.0,
+        path_min_height=150.0
+    )
+    base_nav = FusedNavigationTarget(None, 0.0, '', False, 'IDLE', None, (0, 0), 0.0, 0, False, 0)
+
+    # 1. Chạm trạm Turn 2 (>= 200px)
+    qr_turn2 = create_mock_qr(cx=640, cy=400, width=220, height=220, text="TURN_2")
+    res_start = mission.process(base_nav, [qr_turn2], frame_shape, now=0.0)
+    assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH
+    assert res_start.uart_flag_byte == 3
+
+    # 2. Frame tiếp theo (now=0.1s): Nhiễu rác sàn lọt vào (hộp 80x80 = 6400 px² < 30000 px²)
+    noise_path = create_mock_path_result(
+        path_center_x=640, ref_y=500, offset_px=0.0,
+        bounding_box=(200, 200, 80, 80)
+    )
+    res_noise = mission.process(base_nav, [], frame_shape, path_res=noise_path, now=0.1)
+    assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH, "Vệt rác nhỏ phải bị loại bỏ!"
+    assert res_noise.uart_flag_byte == 3
+
+    # 3. Frame tiếp theo (now=0.2s): Mảnh bạt ngắn (hộp 400x60 = 24000 px² < 30000 px², H=60 < 150)
+    short_path = create_mock_path_result(
+        path_center_x=640, ref_y=500, offset_px=0.0,
+        bounding_box=(200, 200, 400, 60)
+    )
+    res_short = mission.process(base_nav, [], frame_shape, path_res=short_path, now=0.2)
+    assert mission.state == QRTurnMissionState.TURNING_RIGHT_SEEK_PATH, "Mảnh bạt ngắn phải bị loại bỏ!"
+    assert res_short.uart_flag_byte == 3
+
+    # 4. Frame tiếp theo (now=0.3s): Luống thật vào tầm nhìn (hộp 350x300 = 105,000 px² >= 30,000 px², H=300 >= 150)
+    real_path = create_mock_path_result(
+        path_center_x=640, ref_y=500, offset_px=50.0,
+        bounding_box=(200, 200, 350, 300)
+    )
+    res_real = mission.process(base_nav, [], frame_shape, path_res=real_path, now=0.3)
+    assert mission.state == QRTurnMissionState.IDLE, "Luống thật diện tích lớn -> Lập tức khóa luống không cần delay!"
+    assert res_real.uart_flag_byte == 0, "Phát B4=0 để STM32 dừng xoay và bám luống mới"
+    assert res_real.mode_name == "PATH_LINE"
+
+    print("[PASS] test_path_detection_by_min_area_and_height: Min Area & Height based path acquisition 100% verified!")
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("RUNNING AUTOMATED TEST SUITE FOR NAVIGATION FUSION")
@@ -762,7 +821,8 @@ if __name__ == "__main__":
     test_turn_delays_and_confirm_frames()
     test_calib_turn2_rotates_and_stops_completely()
     test_idle_direct_turn2_station_trigger()
+    test_path_detection_by_min_area_and_height()
     print("=" * 60)
-    print("ALL 15 NAVIGATION FUSION TESTS PASSED 100%!")
+    print("ALL 16 NAVIGATION FUSION TESTS PASSED 100%!")
     print("=" * 60)
 
