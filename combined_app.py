@@ -258,7 +258,7 @@ class CombinedRobotApp(QMainWindow):
             confirm_frames=1,
             calib_turn2_stop_only=False,
             path_min_area=30000.0,
-            path_min_height=150.0
+            path_min_height=0.0
         )
 
         self._init_ui()
@@ -462,9 +462,15 @@ class CombinedRobotApp(QMainWindow):
         telemetry_row.addWidget(self.lbl_steering_action)
         grp_nav_layout.addLayout(telemetry_row)
 
+        area_row = QHBoxLayout()
+        self.lbl_path_area = QLabel("📐 Diện tích luống: N/A")
+        self.lbl_path_area.setStyleSheet("color: #e0af68; font-size: 12px; font-weight: bold;")
         self.lbl_active_nav_source = QLabel("Mục tiêu hiện tại: 🌿 Tâm lối đi (Path)")
         self.lbl_active_nav_source.setStyleSheet("color: #7aa2f7; font-size: 12px; font-weight: bold;")
-        grp_nav_layout.addWidget(self.lbl_active_nav_source)
+        area_row.addWidget(self.lbl_path_area)
+        area_row.addStretch()
+        area_row.addWidget(self.lbl_active_nav_source)
+        grp_nav_layout.addLayout(area_row)
 
         uart_row = QHBoxLayout()
         self.chk_uart_enable = QCheckBox("📡 Gửi UART STM32 (/dev/ttySTM32)")
@@ -675,11 +681,11 @@ class CombinedRobotApp(QMainWindow):
 
         grp_mission_layout.addLayout(row_mission_params_2)
 
-        # Hàng 3: Điều kiện lọc Luống Thật (Diện tích tối thiểu, Chiều cao tối thiểu)
+        # Hàng 3: Điều kiện lọc Luống Thật theo Diện tích tối thiểu (Pixel^2)
         row_mission_params_3 = QHBoxLayout()
         row_mission_params_3.setSpacing(6)
 
-        lbl_min_area = QLabel("📐 Min Area:")
+        lbl_min_area = QLabel("📐 Min Area Luống:")
         lbl_min_area.setStyleSheet("color: #a9b1d6; font-size: 11px;")
         self.spin_path_min_area = QSpinBox()
         self.spin_path_min_area.setRange(0, 300000)
@@ -688,19 +694,8 @@ class CombinedRobotApp(QMainWindow):
         self.spin_path_min_area.setSuffix(" px²")
         self.spin_path_min_area.valueChanged.connect(self._on_path_min_area_changed)
 
-        lbl_min_height = QLabel("📏 Min Cao:")
-        lbl_min_height.setStyleSheet("color: #a9b1d6; font-size: 11px;")
-        self.spin_path_min_height = QSpinBox()
-        self.spin_path_min_height.setRange(0, 600)
-        self.spin_path_min_height.setValue(150)
-        self.spin_path_min_height.setSingleStep(10)
-        self.spin_path_min_height.setSuffix(" px")
-        self.spin_path_min_height.valueChanged.connect(self._on_path_min_height_changed)
-
         row_mission_params_3.addWidget(lbl_min_area)
         row_mission_params_3.addWidget(self.spin_path_min_area)
-        row_mission_params_3.addWidget(lbl_min_height)
-        row_mission_params_3.addWidget(self.spin_path_min_height)
 
         grp_mission_layout.addLayout(row_mission_params_3)
 
@@ -1162,8 +1157,9 @@ class CombinedRobotApp(QMainWindow):
             # Vẽ Bounding Box của bạt đen
             if self.chk_show_bbox.isChecked() and path_res.bounding_box:
                 bx, by, bw, bh = path_res.bounding_box
+                area_val = bw * bh
                 cv2.rectangle(vis_frame, (bx, by), (bx + bw, by + bh), (0, 200, 255), 2)
-                cv2.putText(vis_frame, "[LỐI ĐI BẠT ĐEN]", (bx + 5, by + 20),
+                cv2.putText(vis_frame, f"[LOI DI: {area_val:,} px^2 ({bw}x{bh})]", (bx + 5, by + 22),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 2)
 
             # Vẽ Đường tim dẫn hướng (Centerline)
@@ -1313,6 +1309,15 @@ class CombinedRobotApp(QMainWindow):
             self.lbl_line_state.setText(f"Trạng thái: 🎯 {fused_nav.mode_name}")
             self.lbl_line_state.setStyleSheet("color: #bb9af7; font-weight: bold; font-size: 15px;")
             self.lbl_line_offset.setText(f"Độ lệch tâm: {fused_nav.offset_direction}")
+            if hasattr(self, "lbl_path_area"):
+                if path_res and path_res.bounding_box:
+                    _, _, pbw, pbh = path_res.bounding_box
+                    p_area = pbw * pbh
+                    self.lbl_path_area.setText(f"📐 Luống (quét ngầm): {p_area:,} px² ({pbw}×{pbh})")
+                    self.lbl_path_area.setStyleSheet("color: #e0af68; font-size: 12px; font-weight: bold;")
+                else:
+                    self.lbl_path_area.setText("📐 Diện tích luống: N/A (Đang bám QR)")
+                    self.lbl_path_area.setStyleSheet("color: #565f89; font-size: 12px;")
 
             # Tính toán hướng lái đề xuất
             if fused_nav.mission_state == QRTurnMissionState.COMPLETED_STOPPED.value:
@@ -1364,6 +1369,16 @@ class CombinedRobotApp(QMainWindow):
             self.lbl_line_state.setStyleSheet(f"color: {color_state}; font-weight: bold; font-size: 15px;")
             self.lbl_line_offset.setText(f"Độ lệch tâm: {path_res.offset_direction}")
 
+            if hasattr(self, "lbl_path_area"):
+                if path_res.bounding_box:
+                    _, _, pbw, pbh = path_res.bounding_box
+                    p_area = pbw * pbh
+                    self.lbl_path_area.setText(f"📐 Diện tích luống: {p_area:,} px² ({pbw}×{pbh})")
+                    self.lbl_path_area.setStyleSheet("color: #e0af68; font-size: 12px; font-weight: bold;")
+                else:
+                    self.lbl_path_area.setText("📐 Diện tích luống: N/A")
+                    self.lbl_path_area.setStyleSheet("color: #565f89; font-size: 12px;")
+
             if path_res.lateral_offset_px is not None:
                 deg = abs(path_res.lateral_offset_px) / (fw * 0.5) * 15.0
                 if path_res.lateral_offset_px < -5:
@@ -1381,6 +1396,9 @@ class CombinedRobotApp(QMainWindow):
         else:
             self.lbl_active_nav_source.setText("Mục tiêu hiện tại: ⚪ Mất tín hiệu")
             self.lbl_active_nav_source.setStyleSheet("color: #565f89; font-size: 12px;")
+            if hasattr(self, "lbl_path_area"):
+                self.lbl_path_area.setText("📐 Diện tích luống: 0 px² (Mất luống)")
+                self.lbl_path_area.setStyleSheet("color: #565f89; font-size: 12px;")
             self.lbl_fusion_status.setText("Chế độ hiện tại: ⚪ Mất tín hiệu cả lối đi và QR [BYTE 4 = 0]")
             self.lbl_fusion_status.setStyleSheet("color: #565f89; font-size: 12px;")
             self.lbl_line_state.setText("Trạng thái: Mất đường / Chờ tín hiệu")
@@ -1441,7 +1459,11 @@ class CombinedRobotApp(QMainWindow):
         if fused_nav.is_qr_mode:
             line_stat_short = f"🎯 QR-CENTER ({fused_nav.qr_bbox_dim[0]:.0f}x{fused_nav.qr_bbox_dim[1]:.0f})"
         else:
-            line_stat_short = f"🌿 LINE: {path_res.state.name if path_res else 'N/A'}"
+            if path_res and path_res.bounding_box:
+                _, _, h_bw, h_bh = path_res.bounding_box
+                line_stat_short = f"🌿 LINE: {path_res.state.name} ({h_bw*h_bh:,} px²)"
+            else:
+                line_stat_short = f"🌿 LINE: {path_res.state.name if path_res else 'N/A'}"
         qr_count = len([r for r in qr_results if r.is_decoded])
         qr_stat_short = f"QR: {qr_count} mã"
         stop_badge_map = {

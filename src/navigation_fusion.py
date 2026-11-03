@@ -273,7 +273,7 @@ class QRTurnMissionManager:
         confirm_frames: int = 1,
         calib_turn2_stop_only: bool = True,
         path_min_area: float = 30000.0,
-        path_min_height: float = 150.0,
+        path_min_height: float = 0.0,
         **kwargs
     ):
         self.stop_duration_sec = stop_duration_sec
