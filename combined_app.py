@@ -43,7 +43,7 @@ from PyQt5.QtWidgets import (
     QLabel, QPushButton, QSlider, QCheckBox, QFileDialog, QMessageBox,
     QGroupBox, QFrame, QSplitter, QTableWidget, QTableWidgetItem,
     QHeaderView, QTextEdit, QStatusBar, QComboBox, QDoubleSpinBox,
-    QSpinBox, QTabWidget, QProgressBar
+    QSpinBox, QTabWidget, QProgressBar, QScrollArea, QGridLayout
 )
 
 # Thêm thư mục hiện tại vào sys.path
@@ -100,23 +100,24 @@ QTabBar::tab:selected {
 }
 QGroupBox {
     border: 1px solid #2f354a;
-    border-radius: 8px;
-    margin-top: 14px;
-    padding-top: 14px;
+    border-radius: 6px;
+    margin-top: 10px;
+    padding-top: 10px;
+    padding-bottom: 4px;
     font-weight: bold;
     color: #7aa2f7;
 }
 QGroupBox::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    padding: 0 8px;
+    padding: 0 6px;
     background-color: #1a1b26;
 }
 QPushButton {
     background-color: #24283b;
     border: 1px solid #414868;
-    border-radius: 6px;
-    padding: 7px 14px;
+    border-radius: 5px;
+    padding: 5px 10px;
     color: #c0caf5;
     font-weight: 500;
 }
@@ -195,7 +196,8 @@ class CombinedRobotApp(QMainWindow):
     def __init__(self, initial_video: Optional[str] = None, initial_uart: bool = False):
         super().__init__()
         self.setWindowTitle("Robot Nông Nghiệp: Hệ Thống Tích Hợp Dò Đường & Quét Mã QR")
-        self.resize(1360, 880)
+        self.resize(1260, 700)
+        self.setMinimumSize(920, 520)
         self.setStyleSheet(COMBINED_STYLESHEET)
 
         # Trạng thái capture & video
@@ -328,26 +330,29 @@ class CombinedRobotApp(QMainWindow):
         # Màn hình Video
         self.lbl_video = QLabel("Vui lòng mở video hoặc webcam")
         self.lbl_video.setAlignment(Qt.AlignCenter)
-        self.lbl_video.setMinimumSize(680, 500)
+        self.lbl_video.setMinimumSize(360, 220)
         self.lbl_video.setStyleSheet("background-color: #101015; border: 2px solid #24283b; border-radius: 8px;")
         left_layout.addWidget(self.lbl_video, stretch=1)
 
         # Timeline Slider
         timeline_bar = QHBoxLayout()
+        timeline_bar.setContentsMargins(0, 2, 0, 2)
         self.slider_timeline = QSlider(Qt.Horizontal)
         self.slider_timeline.setRange(0, 0)
         self.slider_timeline.sliderMoved.connect(self._on_timeline_slider_moved)
         self.slider_timeline.sliderPressed.connect(self._on_timeline_pressed)
 
         self.lbl_time_info = QLabel("00:00 / 00:00 (Frame 0/0)")
-        self.lbl_time_info.setStyleSheet("color: #a9b1d6; font-family: monospace;")
+        self.lbl_time_info.setStyleSheet("color: #a9b1d6; font-family: monospace; font-size: 11px;")
 
         timeline_bar.addWidget(self.slider_timeline)
         timeline_bar.addWidget(self.lbl_time_info)
         left_layout.addLayout(timeline_bar)
 
-        # Điều khiển phát
+        # Điều khiển phát & Nút nhanh UART tích hợp cùng dòng (tiết kiệm không gian chiều dọc)
         ctrl_bar = QHBoxLayout()
+        ctrl_bar.setContentsMargins(0, 2, 0, 2)
+        ctrl_bar.setSpacing(6)
         self.btn_step_back = QPushButton("◀ 1 Frame")
         self.btn_step_back.clicked.connect(self._step_backward)
 
@@ -358,57 +363,93 @@ class CombinedRobotApp(QMainWindow):
         self.btn_step_fwd = QPushButton("1 Frame ▶")
         self.btn_step_fwd.clicked.connect(self._step_forward)
 
+        self.btn_quick_uart = QPushButton("📡 BẬT UART (STM32)")
+        self.btn_quick_uart.setCheckable(True)
+        self.btn_quick_uart.setChecked(self.uart.is_enabled)
+        self.btn_quick_uart.setToolTip("Bấm để BẬT hoặc TẮT truyền tín hiệu điều khiển 5 byte (mỗi 0.1s) xuống STM32")
+        self.btn_quick_uart.setStyleSheet("background-color: #37474f; color: #ffb74d; font-weight: bold; font-size: 11px; padding: 4px 8px; border: 1px solid #ff9800; border-radius: 4px;")
+        self.btn_quick_uart.clicked.connect(self._toggle_quick_uart)
+
         self.lbl_fps_badge = QLabel("FPS: --")
-        self.lbl_fps_badge.setStyleSheet("color: #e0af68; font-weight: bold; padding: 0 10px;")
+        self.lbl_fps_badge.setStyleSheet("color: #e0af68; font-weight: bold; padding: 0 8px; font-size: 11px;")
 
         ctrl_bar.addWidget(self.btn_step_back)
         ctrl_bar.addWidget(self.btn_play_pause)
         ctrl_bar.addWidget(self.btn_step_fwd)
+        ctrl_bar.addWidget(self.btn_quick_uart)
         ctrl_bar.addStretch()
         ctrl_bar.addWidget(self.lbl_fps_badge)
         left_layout.addLayout(ctrl_bar)
 
-        # Nút to nổi bật BẬT/TẮT gửi lệnh UART STM32 (giống hệt start_nhamang.sh / main_window.py)
-        uart_quick_row = QHBoxLayout()
-        self.btn_quick_uart = QPushButton("📡 BẬT GỬI LỆNH UART (STM32)")
-        self.btn_quick_uart.setCheckable(True)
-        self.btn_quick_uart.setChecked(self.uart.is_enabled)
-        self.btn_quick_uart.setToolTip("Bấm để BẬT hoặc TẮT truyền tín hiệu điều khiển 5 byte (mỗi 0.1s) xuống STM32")
-        self.btn_quick_uart.clicked.connect(self._toggle_quick_uart)
-        uart_quick_row.addWidget(self.btn_quick_uart)
-        left_layout.addLayout(uart_quick_row)
-
         splitter.addWidget(left_widget)
 
         # ==========================================
-        # PANEL PHẢI: TAB CONTROL DÒ ĐƯỜNG & QUÉT MÃ QR
+        # PANEL PHẢI: TAB CONTROL DÒ ĐƯỜNG & QUÉT MÃ QR (CUỘN THÔNG MINH)
         # ==========================================
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(8)
+        right_layout.setSpacing(4)
 
         self.tab_widget = QTabWidget()
+
+        def _make_scrollable_tab(widget_content):
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            scroll.setStyleSheet("""
+                QScrollArea {
+                    border: none;
+                    background-color: transparent;
+                }
+                QScrollBar:vertical {
+                    border: none;
+                    background: #1a1b26;
+                    width: 8px;
+                    margin: 0px;
+                }
+                QScrollBar::handle:vertical {
+                    background: #3d59a1;
+                    min-height: 25px;
+                    border-radius: 4px;
+                }
+                QScrollBar::handle:vertical:hover {
+                    background: #7aa2f7;
+                }
+                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                    height: 0px;
+                }
+            """)
+            scroll.setWidget(widget_content)
+            return scroll
 
         # TAB 1: 🌿 DÒ ĐƯỜNG (LINE TRACKING)
         tab_line = QWidget()
         tab_line_layout = QVBoxLayout(tab_line)
+        tab_line_layout.setContentsMargins(6, 4, 6, 4)
+        tab_line_layout.setSpacing(6)
 
         # Group 1.1: Trạng thái bám đường & Điều hướng
         grp_nav = QGroupBox("🧭 Trạng Thái Bám Đường (Navigation Telemetry)")
         grp_nav_layout = QVBoxLayout(grp_nav)
+        grp_nav_layout.setContentsMargins(8, 8, 8, 8)
+        grp_nav_layout.setSpacing(4)
 
         self.lbl_line_state = QLabel("Trạng thái: Đang chờ...")
-        self.lbl_line_state.setStyleSheet("color: #00E676; font-weight: bold; font-size: 15px;")
+        self.lbl_line_state.setStyleSheet("color: #00E676; font-weight: bold; font-size: 14px;")
         grp_nav_layout.addWidget(self.lbl_line_state)
 
+        telemetry_row = QHBoxLayout()
         self.lbl_line_offset = QLabel("Độ lệch tâm: 0.0 px (Đúng tâm)")
-        self.lbl_line_offset.setStyleSheet("color: #7dcfff; font-size: 13px; font-weight: bold;")
-        grp_nav_layout.addWidget(self.lbl_line_offset)
-
-        self.lbl_steering_action = QLabel("Lệnh lái đề xuất: GIỮ THẲNG")
-        self.lbl_steering_action.setStyleSheet("color: #bb9af7; font-weight: bold; font-size: 13px;")
-        grp_nav_layout.addWidget(self.lbl_steering_action)
+        self.lbl_line_offset.setStyleSheet("color: #7dcfff; font-size: 12px; font-weight: bold;")
+        self.lbl_steering_action = QLabel("Lệnh lái: GIỮ THẲNG")
+        self.lbl_steering_action.setStyleSheet("color: #bb9af7; font-weight: bold; font-size: 12px;")
+        telemetry_row.addWidget(self.lbl_line_offset)
+        telemetry_row.addStretch()
+        telemetry_row.addWidget(self.lbl_steering_action)
+        grp_nav_layout.addLayout(telemetry_row)
 
         self.lbl_active_nav_source = QLabel("Mục tiêu hiện tại: 🌿 Tâm lối đi (Path)")
         self.lbl_active_nav_source.setStyleSheet("color: #7aa2f7; font-size: 12px; font-weight: bold;")
@@ -421,6 +462,7 @@ class CombinedRobotApp(QMainWindow):
         self.lbl_uart_info = QLabel("UART: Tắt")
         self.lbl_uart_info.setStyleSheet("color: #565f89; font-size: 11px;")
         uart_row.addWidget(self.chk_uart_enable)
+        uart_row.addStretch()
         uart_row.addWidget(self.lbl_uart_info)
         grp_nav_layout.addLayout(uart_row)
 
@@ -429,6 +471,8 @@ class CombinedRobotApp(QMainWindow):
         # Group 1.2: Cài đặt mô hình AI Line
         grp_line_cfg = QGroupBox("⚙️ Cấu Hình Mô Hình Dò Đường")
         grp_line_cfg_layout = QVBoxLayout(grp_line_cfg)
+        grp_line_cfg_layout.setContentsMargins(8, 8, 8, 8)
+        grp_line_cfg_layout.setSpacing(4)
 
         model_row = QHBoxLayout()
         model_row.addWidget(QLabel("Model:"))
@@ -442,54 +486,56 @@ class CombinedRobotApp(QMainWindow):
             "Thảm đen (.pt)"
         ])
         self.combo_model.currentIndexChanged.connect(self._on_model_combo_changed)
-        model_row.addWidget(self.combo_model)
+        model_row.addWidget(self.combo_model, stretch=1)
+        self.lbl_dev_badge = QLabel(f"{'CUDA GPU' if self.cuda_available else 'CPU'}")
+        self.lbl_dev_badge.setStyleSheet("color: #9ece6a; font-weight: bold; padding-left: 6px;")
+        model_row.addWidget(self.lbl_dev_badge)
         grp_line_cfg_layout.addLayout(model_row)
 
-        dev_row = QHBoxLayout()
-        dev_row.addWidget(QLabel("Thiết bị tính toán:"))
-        self.lbl_dev_badge = QLabel(f"{'CUDA GPU (RTX 3050)' if self.cuda_available else 'CPU'}")
-        self.lbl_dev_badge.setStyleSheet("color: #9ece6a; font-weight: bold;")
-        dev_row.addWidget(self.lbl_dev_badge)
-        dev_row.addStretch()
-        grp_line_cfg_layout.addLayout(dev_row)
-
         conf_row = QHBoxLayout()
-        self.lbl_line_conf = QLabel("Ngưỡng tin cậy Line: 25%")
-        conf_row.addWidget(self.lbl_line_conf)
-        grp_line_cfg_layout.addLayout(conf_row)
-
+        self.lbl_line_conf = QLabel("Ngưỡng Line: 25%")
+        self.lbl_line_conf.setStyleSheet("font-size: 11px;")
         self.slider_line_conf = QSlider(Qt.Horizontal)
         self.slider_line_conf.setRange(10, 90)
         self.slider_line_conf.setValue(25)
         self.slider_line_conf.valueChanged.connect(self._on_line_conf_changed)
-        grp_line_cfg_layout.addWidget(self.slider_line_conf)
+        conf_row.addWidget(self.lbl_line_conf)
+        conf_row.addWidget(self.slider_line_conf, stretch=1)
+        grp_line_cfg_layout.addLayout(conf_row)
 
-        # Tùy chọn hiển thị
-        self.chk_show_mask = QCheckBox("Hiển thị Mask màu phân đoạn lối đi (Lớp phủ xanh)")
+        # Tùy chọn hiển thị (Xếp lưới 2x2 gọn gàng)
+        self.chk_show_mask = QCheckBox("Mask màu")
         self.chk_show_mask.setChecked(True)
         self.chk_show_mask.toggled.connect(self._reprocess_current_frame)
-        grp_line_cfg_layout.addWidget(self.chk_show_mask)
 
-        self.chk_show_centerline = QCheckBox("Hiển thị Đường tim dẫn hướng (Centerline)")
+        self.chk_show_centerline = QCheckBox("Đường tim")
         self.chk_show_centerline.setChecked(True)
         self.chk_show_centerline.toggled.connect(self._reprocess_current_frame)
-        grp_line_cfg_layout.addWidget(self.chk_show_centerline)
 
-        self.chk_show_bbox = QCheckBox("Hiển thị Hộp bao lối đi (Bounding Box)")
+        self.chk_show_bbox = QCheckBox("Hộp bao")
         self.chk_show_bbox.setChecked(True)
         self.chk_show_bbox.toggled.connect(self._reprocess_current_frame)
-        grp_line_cfg_layout.addWidget(self.chk_show_bbox)
 
-        self.chk_show_offset = QCheckBox("Hiển thị Vectơ lệch tâm từ trục camera")
+        self.chk_show_offset = QCheckBox("Vectơ lệch")
         self.chk_show_offset.setChecked(True)
         self.chk_show_offset.toggled.connect(self._reprocess_current_frame)
-        grp_line_cfg_layout.addWidget(self.chk_show_offset)
+
+        grid_checks = QGridLayout()
+        grid_checks.setHorizontalSpacing(10)
+        grid_checks.setVerticalSpacing(2)
+        grid_checks.addWidget(self.chk_show_mask, 0, 0)
+        grid_checks.addWidget(self.chk_show_centerline, 0, 1)
+        grid_checks.addWidget(self.chk_show_bbox, 1, 0)
+        grid_checks.addWidget(self.chk_show_offset, 1, 1)
+        grp_line_cfg_layout.addLayout(grid_checks)
 
         tab_line_layout.addWidget(grp_line_cfg)
 
         # Group 1.3: Dẫn hướng ưu tiên theo Tâm QR
         grp_fusion = QGroupBox("🎯 Tự Động Bám Tâm QR (QR-Center Alignment)")
         grp_fusion_layout = QVBoxLayout(grp_fusion)
+        grp_fusion_layout.setContentsMargins(8, 8, 8, 8)
+        grp_fusion_layout.setSpacing(4)
 
         self.chk_auto_qr_nav = QCheckBox("BẬT chuyển bám Tâm QR khi đường bao > 100×100 px")
         self.chk_auto_qr_nav.setChecked(True)
@@ -497,144 +543,99 @@ class CombinedRobotApp(QMainWindow):
         self.chk_auto_qr_nav.toggled.connect(self._reprocess_current_frame)
         grp_fusion_layout.addWidget(self.chk_auto_qr_nav)
 
-        thresh_row = QHBoxLayout()
-        thresh_row.addWidget(QLabel("Ngưỡng bám tâm QR:"))
+        qr_sizes_row = QHBoxLayout()
+        qr_sizes_row.addWidget(QLabel("Bám tâm:"))
         self.spin_qr_nav_thresh = QSpinBox()
         self.spin_qr_nav_thresh.setRange(20, 500)
         self.spin_qr_nav_thresh.setValue(100)
         self.spin_qr_nav_thresh.setSuffix(" px")
         self.spin_qr_nav_thresh.valueChanged.connect(self._reprocess_current_frame)
-        thresh_row.addWidget(self.spin_qr_nav_thresh)
-        thresh_row.addStretch()
-        grp_fusion_layout.addLayout(thresh_row)
+        qr_sizes_row.addWidget(self.spin_qr_nav_thresh)
 
-        stop_row = QHBoxLayout()
-        stop_row.addWidget(QLabel("Ngưỡng trạm dừng (QR > 200 px):"))
+        qr_sizes_row.addSpacing(8)
+        qr_sizes_row.addWidget(QLabel("Trạm dừng (>px):"))
         self.spin_qr_stop_thresh = QSpinBox()
         self.spin_qr_stop_thresh.setRange(50, 1000)
         self.spin_qr_stop_thresh.setValue(200)
         self.spin_qr_stop_thresh.setSuffix(" px")
         self.spin_qr_stop_thresh.valueChanged.connect(self._reprocess_current_frame)
-        stop_row.addWidget(self.spin_qr_stop_thresh)
-        stop_row.addStretch()
-        grp_fusion_layout.addLayout(stop_row)
+        qr_sizes_row.addWidget(self.spin_qr_stop_thresh)
+        qr_sizes_row.addStretch()
+        grp_fusion_layout.addLayout(qr_sizes_row)
 
         self.lbl_fusion_status = QLabel("Nguồn tính sai số: 🌿 Tâm lối đi (Chờ QR > 100x100, Dừng > 200x200)")
-        self.lbl_fusion_status.setStyleSheet("color: #7dcfff; font-size: 12px; font-weight: bold;")
+        self.lbl_fusion_status.setStyleSheet("color: #7dcfff; font-size: 11px; font-weight: bold;")
         grp_fusion_layout.addWidget(self.lbl_fusion_status)
 
         tab_line_layout.addWidget(grp_fusion)
 
-        # Group 1.3: Nhiệm vụ tự động chuyển hướng QR (Turn 1 -> Turn 2)
+        # Group 1.4: Nhiệm vụ tự động chuyển hướng QR (Turn 1 -> Turn 2)
         grp_mission = QGroupBox("🚀 Nhiệm Vụ Tự Động: TURN 1 -> Rẽ Trái -> Dừng TURN 2")
         grp_mission_layout = QVBoxLayout(grp_mission)
+        grp_mission_layout.setContentsMargins(8, 8, 8, 8)
+        grp_mission_layout.setSpacing(4)
 
-        self.chk_mission_enabled = QCheckBox("BẬT Chu Trình: Dừng Turn 1 (1s) -> Rẽ Trái -> Dừng Tâm Turn 2")
+        self.chk_mission_enabled = QCheckBox("BẬT Chu Trình: Dừng Turn 1 -> Rẽ Trái -> Dừng Tâm Turn 2")
         self.chk_mission_enabled.setChecked(True)
         self.chk_mission_enabled.setStyleSheet("color: #7aa2f7; font-weight: bold;")
         grp_mission_layout.addWidget(self.chk_mission_enabled)
 
         self.lbl_mission_status = QLabel("Nhiệm vụ QR: Sẵn sàng (Chờ tiếp cận mã TURN_1)")
-        self.lbl_mission_status.setStyleSheet("color: #7dcfff; font-size: 12px; font-weight: bold;")
+        self.lbl_mission_status.setStyleSheet("color: #7dcfff; font-size: 11px; font-weight: bold;")
         grp_mission_layout.addWidget(self.lbl_mission_status)
 
-        # Cấu hình dung sai bắt tâm TURN_2
-        row_align_tol = QHBoxLayout()
-        lbl_align_tol = QLabel("🎯 Dung sai bắt tâm TURN_2 (±px):")
+        # 4 thông số cấu hình nhiệm vụ xếp dạng lưới 2x2 gọn gàng
+        grid_mission = QGridLayout()
+        grid_mission.setHorizontalSpacing(8)
+        grid_mission.setVerticalSpacing(3)
+
+        lbl_align_tol = QLabel("🎯 Tâm TURN_2:")
         lbl_align_tol.setStyleSheet("color: #a9b1d6; font-size: 11px;")
         self.spin_align_tol = QSpinBox()
         self.spin_align_tol.setRange(20, 300)
         self.spin_align_tol.setValue(100)
         self.spin_align_tol.setSingleStep(5)
         self.spin_align_tol.setSuffix(" px")
-        self.spin_align_tol.setToolTip("Khoảng cách tối đa so với tâm giữa camera để khóa dừng xe. Giá trị càng lớn (100-120px) càng bắt nhạy và không bị quay lố.")
-        self.spin_align_tol.setStyleSheet("""
-            QSpinBox {
-                background-color: #1a1b26;
-                color: #7aa2f7;
-                border: 1px solid #3d59a1;
-                border-radius: 4px;
-                padding: 2px 6px;
-                font-weight: bold;
-            }
-        """)
         self.spin_align_tol.valueChanged.connect(self._on_align_tol_changed)
-        row_align_tol.addWidget(lbl_align_tol)
-        row_align_tol.addWidget(self.spin_align_tol)
-        grp_mission_layout.addLayout(row_align_tol)
 
-        # Cấu hình dung sai bắt luống mới (Cách 3: Offset + Góc nghiêng)
-        row_path_tol = QHBoxLayout()
-        lbl_path_tol = QLabel("🌱 Bắt luống mới (|offset| ≤ px):")
+        lbl_path_tol = QLabel("🌱 Bắt luống mới:")
         lbl_path_tol.setStyleSheet("color: #a9b1d6; font-size: 11px;")
         self.spin_path_seek_tol = QSpinBox()
         self.spin_path_seek_tol.setRange(50, 500)
         self.spin_path_seek_tol.setValue(200)
         self.spin_path_seek_tol.setSingleStep(10)
         self.spin_path_seek_tol.setSuffix(" px")
-        self.spin_path_seek_tol.setToolTip("Ngưỡng độ lệch tâm luống tối đa để robot dừng xoay và bắt đầu chạy bám luống (mặc định 200px)")
-        self.spin_path_seek_tol.setStyleSheet("""
-            QSpinBox {
-                background-color: #1a1b26;
-                color: #7aa2f7;
-                border: 1px solid #3d59a1;
-                border-radius: 4px;
-                padding: 2px 6px;
-                font-weight: bold;
-            }
-        """)
         self.spin_path_seek_tol.valueChanged.connect(self._on_path_seek_tol_changed)
-        row_path_tol.addWidget(lbl_path_tol)
-        row_path_tol.addWidget(self.spin_path_seek_tol)
-        grp_mission_layout.addLayout(row_path_tol)
 
-        row_path_angle = QHBoxLayout()
-        lbl_path_angle = QLabel("📐 Góc nghiêng luống (|góc| ≤ độ):")
+        lbl_path_angle = QLabel("📐 Góc luống:")
         lbl_path_angle.setStyleSheet("color: #a9b1d6; font-size: 11px;")
         self.spin_path_seek_angle = QSpinBox()
         self.spin_path_seek_angle.setRange(5, 60)
         self.spin_path_seek_angle.setValue(20)
         self.spin_path_seek_angle.setSingleStep(1)
         self.spin_path_seek_angle.setSuffix(" °")
-        self.spin_path_seek_angle.setToolTip("Ngưỡng góc nghiêng tối đa giữa thân xe và luống để robot dừng xoay (mặc định 20 độ)")
-        self.spin_path_seek_angle.setStyleSheet("""
-            QSpinBox {
-                background-color: #1a1b26;
-                color: #7aa2f7;
-                border: 1px solid #3d59a1;
-                border-radius: 4px;
-                padding: 2px 6px;
-                font-weight: bold;
-            }
-        """)
         self.spin_path_seek_angle.valueChanged.connect(self._on_path_seek_angle_changed)
-        row_path_angle.addWidget(lbl_path_angle)
-        row_path_angle.addWidget(self.spin_path_seek_angle)
-        grp_mission_layout.addLayout(row_path_angle)
 
-        # Cấu hình tự động Reset sau khi xong (Cách 1)
-        row_auto_reset = QHBoxLayout()
-        lbl_auto_reset = QLabel("⏱️ Tự động Reset sau khi xong:")
+        lbl_auto_reset = QLabel("⏱️ Tự Reset:")
         lbl_auto_reset.setStyleSheet("color: #a9b1d6; font-size: 11px;")
         self.spin_auto_reset = QDoubleSpinBox()
         self.spin_auto_reset.setRange(0.0, 30.0)
         self.spin_auto_reset.setValue(3.0)
         self.spin_auto_reset.setSingleStep(0.5)
-        self.spin_auto_reset.setSuffix(" s (0 = Tắt)")
-        self.spin_auto_reset.setStyleSheet("""
-            QDoubleSpinBox {
-                background-color: #1a1b26;
-                color: #7aa2f7;
-                border: 1px solid #3d59a1;
-                border-radius: 4px;
-                padding: 2px 6px;
-                font-weight: bold;
-            }
-        """)
+        self.spin_auto_reset.setSuffix(" s")
         self.spin_auto_reset.valueChanged.connect(self._on_auto_reset_changed)
-        row_auto_reset.addWidget(lbl_auto_reset)
-        row_auto_reset.addWidget(self.spin_auto_reset)
-        grp_mission_layout.addLayout(row_auto_reset)
+
+        grid_mission.addWidget(lbl_align_tol, 0, 0)
+        grid_mission.addWidget(self.spin_align_tol, 0, 1)
+        grid_mission.addWidget(lbl_path_tol, 0, 2)
+        grid_mission.addWidget(self.spin_path_seek_tol, 0, 3)
+
+        grid_mission.addWidget(lbl_path_angle, 1, 0)
+        grid_mission.addWidget(self.spin_path_seek_angle, 1, 1)
+        grid_mission.addWidget(lbl_auto_reset, 1, 2)
+        grid_mission.addWidget(self.spin_auto_reset, 1, 3)
+
+        grp_mission_layout.addLayout(grid_mission)
 
         self.btn_reset_mission = QPushButton("🔄 Reset Thủ Công (Dự phòng)")
         self.btn_reset_mission.setStyleSheet("""
@@ -642,9 +643,10 @@ class CombinedRobotApp(QMainWindow):
                 background-color: #24283b;
                 color: #7aa2f7;
                 border: 1px solid #3d59a1;
-                border-radius: 6px;
-                padding: 6px 12px;
+                border-radius: 4px;
+                padding: 4px 8px;
                 font-weight: bold;
+                font-size: 11px;
             }
             QPushButton:hover {
                 background-color: #3d59a1;
@@ -656,7 +658,7 @@ class CombinedRobotApp(QMainWindow):
 
         tab_line_layout.addWidget(grp_mission)
         tab_line_layout.addStretch()
-        self.tab_widget.addTab(tab_line, "🌿 Dò Đường (Line)")
+        self.tab_widget.addTab(_make_scrollable_tab(tab_line), "🌿 Dò Đường (Line)")
 
         # TAB 2: 🎯 QUÉT MÃ QR (QR CHECKPOINT & SIZING)
         tab_qr = QWidget()
@@ -758,7 +760,7 @@ class CombinedRobotApp(QMainWindow):
 
         tab_qr_layout.addWidget(grp_qr_size)
         tab_qr_layout.addStretch()
-        self.tab_widget.addTab(tab_qr, "🎯 Quét Mã QR")
+        self.tab_widget.addTab(_make_scrollable_tab(tab_qr), "🎯 Quét Mã QR")
 
         # TAB 3: 📜 LỊCH SỬ & NHIỆM VỤ (MISSION LOG)
         tab_log = QWidget()
@@ -1727,27 +1729,27 @@ class CombinedRobotApp(QMainWindow):
             self.chk_uart_enable.setChecked(is_on)
             self.chk_uart_enable.blockSignals(False)
 
-        # 2. Cập nhật nút nhấn nhanh to nổi bật ở Panel Trái (giống start_nhamang.sh)
+        # 2. Cập nhật nút nhấn nhanh nổi bật ở thanh điều khiển (tiết kiệm không gian)
         if hasattr(self, "btn_quick_uart"):
             self.btn_quick_uart.blockSignals(True)
             self.btn_quick_uart.setChecked(is_on)
             if is_on and is_conn:
-                self.btn_quick_uart.setText(f"🟢 ĐANG GỬI UART STM32 ({self.uart.port}) - BẤM ĐỂ TẮT")
+                self.btn_quick_uart.setText(f"🟢 GỬI UART ({self.uart.port}) - BẬT")
                 self.btn_quick_uart.setStyleSheet(
-                    "background-color: #2e7d32; color: #ffffff; font-weight: bold; font-size: 13px; "
-                    "padding: 10px; border-radius: 6px; border: 2px solid #81c784;"
+                    "background-color: #2e7d32; color: #ffffff; font-weight: bold; font-size: 11px; "
+                    "padding: 4px 8px; border-radius: 4px; border: 1px solid #81c784;"
                 )
             elif is_on and not is_conn:
-                self.btn_quick_uart.setText(f"🔴 LỖI KẾT NỐI UART ({self.uart.port}) - BẤM THỬ LẠI")
+                self.btn_quick_uart.setText(f"🔴 LỖI UART ({self.uart.port})")
                 self.btn_quick_uart.setStyleSheet(
-                    "background-color: #b71c1c; color: #ffffff; font-weight: bold; font-size: 13px; "
-                    "padding: 10px; border-radius: 6px; border: 2px solid #ef5350;"
+                    "background-color: #b71c1c; color: #ffffff; font-weight: bold; font-size: 11px; "
+                    "padding: 4px 8px; border-radius: 4px; border: 1px solid #ef5350;"
                 )
             else:
-                self.btn_quick_uart.setText("📡 BẬT GỬI LỆNH UART (STM32)")
+                self.btn_quick_uart.setText("📡 BẬT UART (STM32)")
                 self.btn_quick_uart.setStyleSheet(
-                    "background-color: #37474f; color: #ffb74d; font-weight: bold; font-size: 13px; "
-                    "padding: 10px; border-radius: 6px; border: 1px solid #ff9800;"
+                    "background-color: #37474f; color: #ffb74d; font-weight: bold; font-size: 11px; "
+                    "padding: 4px 8px; border-radius: 4px; border: 1px solid #ff9800;"
                 )
             self.btn_quick_uart.blockSignals(False)
 
