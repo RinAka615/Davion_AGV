@@ -261,12 +261,12 @@ class QRTurnMissionManager:
     """
     def __init__(
         self,
-        stop_duration_sec: float = 1.0,
+        stop_duration_sec: float = 0.5,
         pause_center_sec: float = 0.5,
         align_tolerance_px: float = 180.0, # Biến offset để bắt tâm (mặc định ±180px trên khung 1280px)
         min_stop_qr_dim: float = 200.0,
         auto_reset_delay_sec: float = 3.0,
-        path_seek_tolerance_px: float = 200.0,
+        path_seek_tolerance_px: float = 100.0,
         path_seek_max_angle_deg: float = 20.0,
         delay_turn1_sec: float = 1.0,
         delay_turn2_sec: float = 3.0,

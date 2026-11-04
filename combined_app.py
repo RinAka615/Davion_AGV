@@ -247,11 +247,11 @@ class CombinedRobotApp(QMainWindow):
 
         # --- 4. MÁY TRẠNG THÁI NHIỆM VỤ CHUYỂN HƯỚNG QR (TURN 1 -> TURN 2) ---
         self.qr_mission = QRTurnMissionManager(
-            stop_duration_sec=1.0,
+            stop_duration_sec=0.5,
             align_tolerance_px=180.0,
             min_stop_qr_dim=200.0,
             auto_reset_delay_sec=3.0,
-            path_seek_tolerance_px=200.0,
+            path_seek_tolerance_px=100.0,
             path_seek_max_angle_deg=20.0,
             delay_turn1_sec=1.0,
             delay_turn2_sec=3.0,
@@ -610,7 +610,7 @@ class CombinedRobotApp(QMainWindow):
         lbl_path_tol.setStyleSheet("color: #a9b1d6; font-size: 11px;")
         self.spin_path_seek_tol = QSpinBox()
         self.spin_path_seek_tol.setRange(50, 500)
-        self.spin_path_seek_tol.setValue(200)
+        self.spin_path_seek_tol.setValue(100)
         self.spin_path_seek_tol.setSingleStep(10)
         self.spin_path_seek_tol.setSuffix(" px")
         self.spin_path_seek_tol.valueChanged.connect(self._on_path_seek_tol_changed)
