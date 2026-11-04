@@ -25,3 +25,10 @@ runs_train/
 datasets/
 record*.mp4
 *.cache
+
+# Output data & recordings
+output/
+output_qr/recordings/
+output_qr/snapshots/
+*.code-workspace
+.venv
