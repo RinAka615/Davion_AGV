@@ -247,7 +247,8 @@ class CombinedRobotApp(QMainWindow):
 
         # --- 4. MÁY TRẠNG THÁI NHIỆM VỤ CHUYỂN HƯỚNG QR (TURN 1 -> TURN 2) ---
         self.qr_mission = QRTurnMissionManager(
-            stop_duration_sec=0.5,
+            stop_duration_sec=1.0,
+            pause_center_sec=1.0,
             align_tolerance_px=180.0,
             min_stop_qr_dim=200.0,
             auto_reset_delay_sec=3.0,

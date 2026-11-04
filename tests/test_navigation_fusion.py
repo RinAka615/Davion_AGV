@@ -557,17 +557,17 @@ def test_turn2_detection_during_rotation_stops_and_approaches():
     assert res1.uart_flag_byte == 2, f"Expected B4=2 (dừng 500ms triệt tiêu quán tính quay), got {res1.uart_flag_byte}"
     assert abs(res1.lateral_offset_px - (-124.0)) < 1e-3
 
-    # 2. Trong 500ms dừng (now = 10.3s): Duy trì B4 = 2
-    res2 = mission.process(base_nav, [qr_ai], frame_shape, now=10.3)
+    # 2. Trong 1.0s dừng (now = 10.5s): Duy trì B4 = 2
+    res2 = mission.process(base_nav, [qr_ai], frame_shape, now=10.5)
     assert res2.uart_flag_byte == 2
 
-    # 3. Hết 500ms dừng (now = 10.7s): Gửi B4 = 0 để xe tiến theo tâm TURN_2 qua PID
-    res3 = mission.process(base_nav, [qr_ai], frame_shape, now=10.7)
+    # 3. Hết 1.0s dừng (now = 11.2s): Gửi B4 = 0 để xe tiến theo tâm TURN_2 qua PID
+    res3 = mission.process(base_nav, [qr_ai], frame_shape, now=11.2)
     assert mission.state == QRTurnMissionState.APPROACHING_TURN2
     assert res3.uart_flag_byte == 0, f"Expected B4=0 (tiến theo tâm TURN_2), got {res3.uart_flag_byte}"
     assert abs(res3.lateral_offset_px - (-124.0)) < 1e-3
 
-    print("[PASS] test_turn2_detection_during_rotation_stops_and_approaches: Detection -> Stop 500ms (B4=2) -> Approach Center (B4=0) 100% verified!")
+    print("[PASS] test_turn2_detection_during_rotation_stops_and_approaches: Detection -> Stop 1.0s (B4=2) -> Approach Center (B4=0) 100% verified!")
 
 
 def test_turn_delays_and_confirm_frames():

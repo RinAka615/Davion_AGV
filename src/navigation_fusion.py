@@ -261,8 +261,8 @@ class QRTurnMissionManager:
     """
     def __init__(
         self,
-        stop_duration_sec: float = 0.5,
-        pause_center_sec: float = 0.5,
+        stop_duration_sec: float = 1.0,
+        pause_center_sec: float = 1.0,
         align_tolerance_px: float = 180.0, # Biến offset để bắt tâm (mặc định ±180px trên khung 1280px)
         min_stop_qr_dim: float = 200.0,
         auto_reset_delay_sec: float = 3.0,
@@ -619,7 +619,7 @@ class QRTurnMissionManager:
                     # Đang trong 500ms dừng triệt tiêu quán tính hay đang tiến?
                     if dt_pause < self.pause_center_sec:
                         flag_to_send = 2
-                        self.last_status_desc = f"⏸️ TẠM DỪNG 500MS TRIỆT TIÊU QUÁN TÍNH ({dt_pause*1000:.0f}/{self.pause_center_sec*1000:.0f}ms) (Lệch {offset_px:+.1f}px)"
+                        self.last_status_desc = f"⏸️ TẠM DỪNG {int(self.pause_center_sec*1000)}MS TRIỆT TIÊU QUÁN TÍNH ({dt_pause*1000:.0f}/{self.pause_center_sec*1000:.0f}ms) (Lệch {offset_px:+.1f}px)"
                     else:
                         flag_to_send = 0
                         self.last_status_desc = f"🚀 TIẾN THEO TÂM TURN_2 ({bw:.0f}x{bh:.0f}px / {self.min_stop_qr_dim:.0f}px, Lệch {offset_px:+.1f}px)"

@@ -4,7 +4,7 @@
 
 ## 1. TỔNG QUAN HỆ THỐNG PHẦN MỀM (SOFTWARE OVERVIEW)
 
-Hệ thống phần mềm trên máy tính nhúng (Raspberry Pi 5) đảm nhiệm vai trò là bộ não thị giác máy tính và máy trạng thái điều phối cấp cao (High-Level Perception & Mission Controller). Hệ thống vận hành theo vòng lặp thời gian thực từ 30 – 40 FPS với 4 phân tầng kiến trúc:
+Hệ thống phần mềm trên máy tính nhúng (Raspberry Pi 5) đóng vai trò là "bộ não thị giác và điều phối cấp cao" (High-Level Perception & Mission Controller). Hệ thống vận hành theo vòng lặp thời gian thực từ 30 – 40 FPS với 4 phân tầng kiến trúc:
 
 1. **Perception Layer (Tầng Thị giác):**
    * **Path Detection (`src/path_detector.py` / `src/yolo_segmenter.py`):** Sử dụng mô hình `YOLO-FastestV2 NCNN INT8` phân đoạn luống bạt (màu đen/xanh), xác định Bounding Box, điểm tâm luống $C_{\text{path}}(x, y)$, đường tim (Centerline) và độ lệch ngang $\text{dx}_{\text{path}} = x_{\text{path}} - x_{\text{cam}}$.
@@ -20,6 +20,9 @@ Hệ thống phần mềm trên máy tính nhúng (Raspberry Pi 5) đảm nhiệ
 
 4. **Communication Layer (Tầng Đóng gói & Truyền thông UART - `uart_controller.py`):**
    * Đóng gói gói tin 5 Bytes gửi xuống vi điều khiển STM32 với chu kỳ 25 – 33ms qua cổng serial `/dev/ttySTM32`.
+
+> [!NOTE]
+> **Phân định Software vs Firmware:** Mọi hành vi phanh hãm động cơ và dừng vật lý đều do Firmware STM32 tự động thực thi thông qua timer nội phần cứng khi nhận được cờ UART tương ứng từ Pi 5. Các khoảng thời gian đếm trên Python (`delay_turn1_sec`, `delay_turn2_sec`, v.v.) đóng vai trò là **vùng mù camera chống nhiễu (Vision Blanking Window)** để đồng bộ nhịp nhàng với động tác cơ khí của xe.
 
 ---
 
@@ -57,10 +60,10 @@ flowchart TD
         %% GIAI ĐOẠN 3
         CHG2 --> G3
         subgraph GD3["Giai đoạn 3: DỪNG TRẠM QR1 (Stop Station 1)"]
-            G3["DỪNG HẲN 500MS TRIỆT TIÊU QUÁN TÍNH"]
-            G3 --> CHK3{"dt >= 500ms?"}
-            CHK3 -- "Đang dừng 500ms" --> OUT3["Khóa phanh: Byte 4 = 1, dx = 0"]
-            CHK3 -- "Hết 500ms" --> CHG3["Lưu mốc xoay, chuyển Giai đoạn 4"]
+            G3["DỪNG HẲN 1.0S TRIỆT TIÊU QUÁN TÍNH"]
+            G3 --> CHK3{"dt >= 1.0s?"}
+            CHK3 -- "Đang dừng 1.0s" --> OUT3["Khóa phanh: Byte 4 = 1, dx = 0"]
+            CHK3 -- "Hết 1.0s" --> CHG3["Lưu mốc xoay, chuyển Giai đoạn 4"]
         end
 
         %% GIAI ĐOẠN 4
@@ -77,7 +80,7 @@ flowchart TD
         %% GIAI ĐOẠN 5
         CHG4 --> G5
         subgraph GD5["Giai đoạn 5: TIẾN THEO TÂM QR2 (Approach QR2)"]
-            G5["Tạm dừng 500ms hãm trớn quay (B4=2)<br/>Sau đó tiến thẳng theo tâm QR2 (B4=0)"]
+            G5["Tạm dừng 1.0s hãm trớn quay (B4=2)<br/>Sau đó tiến thẳng theo tâm QR2 (B4=0)"]
             G5 --> CHK5{"Kích thước QR2<br/>> 200px?"}
             CHK5 -- "Chưa tới trạm" --> OUT5["Tiến thẳng bám tâm QR2<br/>Gửi: Byte 4 = 0, dx = QR2"]
             CHK5 -- "QR2 > 200px (Tới trạm)" --> CHG5["Chuyển sang Giai đoạn 6"]
@@ -86,10 +89,10 @@ flowchart TD
         %% GIAI ĐOẠN 6
         CHG5 --> G6
         subgraph GD6["Giai đoạn 6: DỪNG TRẠM QR2 (Stop Station 2)"]
-            G6["DỪNG HẲN 500MS TRIỆT TIÊU QUÁN TÍNH"]
-            G6 --> CHK6{"dt >= 500ms?"}
-            CHK6 -- "Đang dừng 500ms" --> OUT6["Khóa phanh: Byte 4 = 1, dx = 0"]
-            CHK6 -- "Hết 500ms" --> CHG6["Lưu mốc xoay T2, chuyển Giai đoạn 7"]
+            G6["DỪNG HẲN 1.0S TRIỆT TIÊU QUÁN TÍNH"]
+            G6 --> CHK6{"dt >= 1.0s?"}
+            CHK6 -- "Đang dừng 1.0s" --> OUT6["Khóa phanh: Byte 4 = 1, dx = 0"]
+            CHK6 -- "Hết 1.0s" --> CHG6["Lưu mốc xoay T2, chuyển Giai đoạn 7"]
         end
 
         %% GIAI ĐOẠN 7
@@ -139,9 +142,9 @@ flowchart TD
 
 ### 📌 Giai đoạn 3: Dừng trạm QR1 (Stop Station 1)
 * **Ý nghĩa:** Hãm dừng xe tại trạm mốc 1 để triệt tiêu toàn bộ quán tính chạy tới và làm dịu khung hình camera trước khi xoay.
-* **Thời gian thực hiện:** Đúng **$500\text{ms}$** (0.5 giây).
+* **Thời gian thực hiện:** Đúng **$1.0\text{s}$** (1000ms).
 * **Tín hiệu gửi đi:** `Byte 4 = 1`, `offset = 0.0` (Khóa phanh dừng hẳn).
-* **Điều kiện chuyển tiếp:** Sau khi đếm đủ $500\text{ms}$ dừng $\to$ Ghi nhận mốc thời gian bắt đầu xoay `turn_start_time = now`, chuyển sang **Giai đoạn 4**.
+* **Điều kiện chuyển tiếp:** Sau khi đếm đủ $1.0\text{s}$ dừng $\to$ Ghi nhận mốc thời gian bắt đầu xoay `turn_start_time = now`, chuyển sang **Giai đoạn 4**.
 
 ---
 
@@ -162,8 +165,8 @@ flowchart TD
 ### 📌 Giai đoạn 5: Tiến theo tâm mã QR2 (Approach QR2)
 * **Ý nghĩa:** Đưa xe di chuyển từ đầu luống cũ sang tiếp cận trạm đầu luống mới.
 * **Hành vi thực thi:**
-  1. Trong $500\text{ms}$ đầu: Gửi `Byte 4 = 2` để tạm dừng hãm lực xoay trái, giúp xe đứng yên ổn định hướng nhìn.
-  2. Sau $500\text{ms}$: Chuyển sang `Byte 4 = 0`, xe tiến thẳng tịnh tiến về phía trước theo độ lệch tâm của `QR2`.
+  1. Trong **$1.0\text{s}$ đầu**: Gửi `Byte 4 = 2` để tạm dừng hãm lực xoay trái, giúp xe đứng yên ổn định hướng nhìn.
+  2. Sau $1.0\text{s}$: Chuyển sang `Byte 4 = 0`, xe tiến thẳng tịnh tiến về phía trước theo độ lệch tâm của `QR2`.
   3. **Cơ chế chống rung lắc (Debounce Failsafe):** Nếu xe vừa chạy làm rung lắc camera mất dấu `QR2` chớp nhoáng ($< 1.2\text{s}$), xe vẫn giữ nguyên hướng lái thẳng theo góc lệch gần nhất.
 * **Điều kiện chuyển tiếp:** Khi xe tiến sát tới mức kích thước `QR2` đạt:
   $$\text{dim}_{\text{QR2}} > 200\text{ px}$$
@@ -173,9 +176,9 @@ flowchart TD
 
 ### 📌 Giai đoạn 6: Dừng trạm QR2 (Stop Station 2)
 * **Ý nghĩa:** Hãm dừng xe tại trạm mốc 2 để triệt tiêu đà quán tính tiến thẳng trước khi thực hiện cua góc vào luống mới.
-* **Thời gian thực hiện:** Đúng **$500\text{ms}$** (0.5 giây).
+* **Thời gian thực hiện:** Đúng **$1.0\text{s}$** (1000ms).
 * **Tín hiệu gửi đi:** `Byte 4 = 1`, `offset = 0.0`.
-* **Điều kiện chuyển tiếp:** Sau khi đếm đủ $500\text{ms}$ dừng $\to$ Ghi nhận mốc xoay `turn_right_start_time = now`, chuyển sang **Giai đoạn 7**.
+* **Điều kiện chuyển tiếp:** Sau khi đếm đủ $1.0\text{s}$ dừng $\to$ Ghi nhận mốc xoay `turn_right_start_time = now`, chuyển sang **Giai đoạn 7**.
 
 ---
 
@@ -209,7 +212,7 @@ $$\text{Packet} = [\text{Byte 0}, \text{Byte 1}, \text{Byte 2}, \text{Byte 3}, \
 | **1** | `Header 2` | `uint8` | Byte đồng bộ cố định `0x00` |
 | **2** | `Offset High` | `uint8` | Byte cao của độ lệch tâm `offset` |
 | **3** | `Offset Low` | `uint8` | Byte thấp của độ lệch tâm `offset` |
-| **4** | `Control Flag` | `uint8` | **Cờ trạng thái nhiệm vụ:**<br>• `0`: Chạy bình thường theo PID (bám luống hoặc bám tâm QR)<br>• `1`: Dừng hẳn phanh xe (Dừng 500ms tại trạm QR1/QR2 hoặc Calib dừng)<br>• `2`: Tạm dừng 500ms triệt tiêu quán tính quay sau khi bắt trúng tâm QR2<br>• `3`: Lệnh xoay chuyển hướng tại trạm QR2 |
+| **4** | `Control Flag` | `uint8` | **Cờ trạng thái nhiệm vụ:**<br>• `0`: Chạy bình thường theo PID (bám luống hoặc bám tâm QR)<br>• `1`: Dừng hẳn phanh xe (Dừng 1.0s tại trạm QR1/QR2 hoặc Calib dừng)<br>• `2`: Tạm dừng 1.0s triệt tiêu quán tính quay sau khi bắt trúng tâm QR2<br>• `3`: Lệnh xoay chuyển hướng tại trạm QR2 |
 
 ---
 
@@ -219,7 +222,8 @@ $$\text{Packet} = [\text{Byte 0}, \text{Byte 1}, \text{Byte 2}, \text{Byte 3}, \
 | :--- | :--- | :---: | :--- |
 | **Ngưỡng bám QR** | `min_qr_size` | `100 px` | Kích thước QR để ngắt bám luống và chuyển sang bám tâm QR |
 | **Trạm dừng (>=px)** | `min_stop_qr_dim` | `200 px` | Kích thước QR để xác nhận chạm trạm dừng tại QR1 và QR2 |
-| **Dừng trạm QR1/QR2**| `stop_duration_sec` | `0.50 s` | Thời gian dừng hãm quán tính tại trạm QR1 và QR2 (500ms) |
+| **Dừng trạm QR1/QR2**| `stop_duration_sec` | `1.00 s` | Thời gian dừng hãm quán tính tại trạm QR1 và QR2 (1000ms) |
+| **Dừng khóa tâm QR2** | `pause_center_sec` | `1.00 s` | Thời gian tạm dừng sau khi khóa tâm QR2 để triệt đà quay (1000ms) |
 | **Trễ T1 (Debounce)** | `delay_turn1_sec` | `1.00 s` | Thời gian xoay mù chống nhiễu hình ảnh khi rời trạm QR1 |
 | **Trễ T2 (Debounce)** | `delay_turn2_sec` | `3.00 s` | Thời gian xoay mù chống nhiễu mặt sàn khi rời trạm QR2 |
 | **Tâm TURN_2** | `align_tolerance_px` | `180 px` | Vùng dung sai để xác nhận đã căn trúng tâm mã QR2 |
