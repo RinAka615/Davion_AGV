@@ -645,8 +645,9 @@ class YoloSegmenter:
                 fallback_reason=fallback_reason
             )
 
-        # Extract all detected instances
+        # Extract all detected instances (Class 0: bat_loi_di, Class 1: qr_code)
         instances: List[InstanceDetection] = []
+        qr_boxes_pt: List[Tuple[int, int, int, int, float]] = []
         mask_data = masks.data.cpu().numpy()  # (N, H_mask, W_mask)
         num_instances = len(boxes)
 
@@ -660,6 +661,11 @@ class YoloSegmenter:
             y1 = int(np.clip(y1, 0, h_img - 1))
             x2 = int(np.clip(x2, x1 + 1, w_img))
             y2 = int(np.clip(y2, y1 + 1, h_img))
+
+            if cls_id == 1 or cls_name == "qr_code":
+                if (x2 - x1) >= 24 and (y2 - y1) >= 24:
+                    qr_boxes_pt.append((x1, y1, x2, y2, c_score))
+                continue
 
             raw_m = mask_data[i]
             mh, mw = raw_m.shape[:2]
@@ -701,6 +707,8 @@ class YoloSegmenter:
                 bottom_y=y2
             ))
 
+        self.last_ai_qr_boxes = qr_boxes_pt
+
         if not instances:
             return YoloResult(
                 is_valid=True,
@@ -710,7 +718,8 @@ class YoloSegmenter:
                 class_names=self.class_names,
                 frame_shape=(h_img, w_img),
                 device_used=device_used,
-                fallback_reason=fallback_reason
+                fallback_reason=fallback_reason,
+                qr_boxes=qr_boxes_pt
             )
 
         # Select the single instance that best represents the corridor path in front of the robot
@@ -738,7 +747,8 @@ class YoloSegmenter:
             class_names=self.class_names,
             frame_shape=(h_img, w_img),
             device_used=device_used,
-            fallback_reason=fallback_reason
+            fallback_reason=fallback_reason,
+            qr_boxes=qr_boxes_pt
         )
 
     def _select_best_path_instance(
