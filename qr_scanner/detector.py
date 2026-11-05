@@ -67,9 +67,9 @@ class QRDetector:
             ]
         else:
             self.zxing_formats = []
-        self.last_decoded_text: str = "TURN_2"
+        self.last_decoded_text: str = "TURN_1"
 
-    def reset_last_decoded_text(self, default_text: str = "TURN_2") -> None:
+    def reset_last_decoded_text(self, default_text: str = "TURN_1") -> None:
         """Đặt lại chuỗi mã QR ghi nhớ gần nhất khi chuyển pha nhiệm vụ (ví dụ xoay từ TURN_1 sang TURN_2)."""
         self.last_decoded_text = default_text
 
@@ -191,11 +191,10 @@ class QRDetector:
                 if decoded_from_roi or q_conf >= 0.42:
                     if decoded_from_roi:
                         qr_text = decoded_from_roi
-                    elif self.last_decoded_text and "TURN_1" not in self.last_decoded_text.upper():
+                    elif self.last_decoded_text:
                         qr_text = self.last_decoded_text
                     else:
-                        # Khi xe đang xoay tìm trạm mới (hoặc text trước là TURN_1), nhãn dự đoán chuyển hướng là TURN_2
-                        qr_text = "TURN_2"
+                        qr_text = "TURN_1"
                     results.append(QRDetectionResult(
                         points=pts_ordered,
                         text=qr_text,

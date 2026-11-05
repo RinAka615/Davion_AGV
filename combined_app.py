@@ -247,16 +247,14 @@ class CombinedRobotApp(QMainWindow):
 
         # --- 4. MÁY TRẠNG THÁI NHIỆM VỤ CHUYỂN HƯỚNG QR (ZICZAC 2 LUỐNG) ---
         self.qr_mission = QRTurnMissionManager(
-            stop_duration_sec=1.0,
-            pause_center_sec=0.5,
-            align_tolerance_px=180.0,
+            min_qr_nav_dim=30.0,
             min_stop_qr_dim=200.0,
-            auto_reset_delay_sec=3.0,
-            path_seek_tolerance_px=40.0,
-            path_seek_max_angle_deg=20.0,
-            delay_turn1_sec=1.0,
-            delay_turn2_sec=1.0,
-            confirm_frames=1,
+            stop_delay_t1_sec=1.0,
+            blind_turn1_sec=2.0,
+            pause_turn1_sec=0.5,
+            stop_delay_t2_sec=1.0,
+            blind_turn2_sec=2.0,
+            pause_turn2_sec=0.5,
             calib_turn2_stop_only=False
         )
 
@@ -547,7 +545,7 @@ class CombinedRobotApp(QMainWindow):
         grp_fusion_layout.setContentsMargins(8, 8, 8, 8)
         grp_fusion_layout.setSpacing(4)
 
-        self.chk_auto_qr_nav = QCheckBox("BẬT chuyển bám Tâm QR khi đường bao > 100×100 px")
+        self.chk_auto_qr_nav = QCheckBox("BẬT chuyển bám Tâm QR khi phát hiện mã QR")
         self.chk_auto_qr_nav.setChecked(True)
         self.chk_auto_qr_nav.setStyleSheet("color: #bb9af7; font-weight: bold;")
         self.chk_auto_qr_nav.toggled.connect(self._reprocess_current_frame)
@@ -556,8 +554,8 @@ class CombinedRobotApp(QMainWindow):
         qr_sizes_row = QHBoxLayout()
         qr_sizes_row.addWidget(QLabel("Bám tâm:"))
         self.spin_qr_nav_thresh = QSpinBox()
-        self.spin_qr_nav_thresh.setRange(20, 500)
-        self.spin_qr_nav_thresh.setValue(100)
+        self.spin_qr_nav_thresh.setRange(10, 500)
+        self.spin_qr_nav_thresh.setValue(30)
         self.spin_qr_nav_thresh.setSuffix(" px")
         self.spin_qr_nav_thresh.valueChanged.connect(self._reprocess_current_frame)
         qr_sizes_row.addWidget(self.spin_qr_nav_thresh)
@@ -573,72 +571,32 @@ class CombinedRobotApp(QMainWindow):
         qr_sizes_row.addStretch()
         grp_fusion_layout.addLayout(qr_sizes_row)
 
-        self.lbl_fusion_status = QLabel("Nguồn tính sai số: 🌿 Tâm lối đi (Chờ QR > 100x100, Dừng > 200x200)")
+        self.lbl_fusion_status = QLabel("Nguồn tính sai số: 🌿 Tâm lối đi (Chờ QR ≥ 30px, Dừng ≥ 200px)")
         self.lbl_fusion_status.setStyleSheet("color: #7dcfff; font-size: 11px; font-weight: bold;")
         grp_fusion_layout.addWidget(self.lbl_fusion_status)
 
         tab_line_layout.addWidget(grp_fusion)
 
         # Group 1.4: Nhiệm vụ tự động chuyển hướng QR (Turn 1 -> Turn 2)
-        grp_mission = QGroupBox("🚀 Nhiệm Vụ Tự Động: TURN 1 -> Rẽ Trái -> Dừng TURN 2")
+        grp_mission = QGroupBox("🚀 Nhiệm Vụ Tự Động: TURN 1 -> Xoay Phải Mù -> Bám TURN 2 -> Xoay Trái Mù")
         grp_mission_layout = QVBoxLayout(grp_mission)
         grp_mission_layout.setContentsMargins(8, 8, 8, 8)
         grp_mission_layout.setSpacing(4)
 
-        self.chk_mission_enabled = QCheckBox("BẬT Chu Trình: Dừng Turn 1 -> Rẽ Trái -> Dừng Tâm Turn 2")
+        self.chk_mission_enabled = QCheckBox("BẬT Chu Trình: Dừng T1 -> Xoay Phải Mù -> Bám Tâm T2 -> Xoay Trái Mù")
         self.chk_mission_enabled.setChecked(True)
         self.chk_mission_enabled.setStyleSheet("color: #7aa2f7; font-weight: bold;")
         grp_mission_layout.addWidget(self.chk_mission_enabled)
 
-        self.lbl_mission_status = QLabel("Nhiệm vụ QR: Sẵn sàng (Chờ tiếp cận mã TURN_1)")
+        self.lbl_mission_status = QLabel("Nhiệm vụ QR: Sẵn sàng (Bám luống 1, chờ mã QR1)")
         self.lbl_mission_status.setStyleSheet("color: #7dcfff; font-size: 11px; font-weight: bold;")
         grp_mission_layout.addWidget(self.lbl_mission_status)
 
-        # Các thông số nhiệm vụ xếp trên 1 dòng ngang gọn gàng
+        # Hàng 1: Dừng T1, Xoay phải mù T1, Dừng dập đà T1
         row_mission_params = QHBoxLayout()
         row_mission_params.setSpacing(6)
 
-        lbl_align_tol = QLabel("🎯 Tâm TURN_2:")
-        lbl_align_tol.setStyleSheet("color: #a9b1d6; font-size: 11px;")
-        self.spin_align_tol = QSpinBox()
-        self.spin_align_tol.setRange(20, 300)
-        self.spin_align_tol.setValue(180)
-        self.spin_align_tol.setSingleStep(5)
-        self.spin_align_tol.setSuffix(" px")
-        self.spin_align_tol.valueChanged.connect(self._on_align_tol_changed)
-
-        lbl_path_tol = QLabel("🌱 Bắt luống:")
-        lbl_path_tol.setStyleSheet("color: #a9b1d6; font-size: 11px;")
-        self.spin_path_seek_tol = QSpinBox()
-        self.spin_path_seek_tol.setRange(20, 500)
-        self.spin_path_seek_tol.setValue(40)
-        self.spin_path_seek_tol.setSingleStep(10)
-        self.spin_path_seek_tol.setSuffix(" px")
-        self.spin_path_seek_tol.valueChanged.connect(self._on_path_seek_tol_changed)
-
-        lbl_auto_reset = QLabel("⏱️ Tự Reset:")
-        lbl_auto_reset.setStyleSheet("color: #a9b1d6; font-size: 11px;")
-        self.spin_auto_reset = QDoubleSpinBox()
-        self.spin_auto_reset.setRange(0.0, 30.0)
-        self.spin_auto_reset.setValue(3.0)
-        self.spin_auto_reset.setSingleStep(0.5)
-        self.spin_auto_reset.setSuffix(" s")
-        self.spin_auto_reset.valueChanged.connect(self._on_auto_reset_changed)
-
-        row_mission_params.addWidget(lbl_align_tol)
-        row_mission_params.addWidget(self.spin_align_tol)
-        row_mission_params.addWidget(lbl_path_tol)
-        row_mission_params.addWidget(self.spin_path_seek_tol)
-        row_mission_params.addWidget(lbl_auto_reset)
-        row_mission_params.addWidget(self.spin_auto_reset)
-
-        grp_mission_layout.addLayout(row_mission_params)
-
-        # Hàng 2: Trễ xoay Turn 1, Trễ xoay Turn 2, Số frame xác nhận (Debounce)
-        row_mission_params_2 = QHBoxLayout()
-        row_mission_params_2.setSpacing(6)
-
-        lbl_delay_turn1 = QLabel("⏱️ Trễ T1:")
+        lbl_delay_turn1 = QLabel("⏱️ Dừng T1:")
         lbl_delay_turn1.setStyleSheet("color: #a9b1d6; font-size: 11px;")
         self.spin_delay_turn1 = QDoubleSpinBox()
         self.spin_delay_turn1.setRange(0.0, 5.0)
@@ -647,40 +605,78 @@ class CombinedRobotApp(QMainWindow):
         self.spin_delay_turn1.setSuffix(" s")
         self.spin_delay_turn1.valueChanged.connect(self._on_delay_turn1_changed)
 
-        lbl_delay_turn2 = QLabel("⏱️ Trễ T2:")
+        lbl_blind_turn1 = QLabel("↪️ Xoay phải mù:")
+        lbl_blind_turn1.setStyleSheet("color: #a9b1d6; font-size: 11px;")
+        self.spin_blind_turn1 = QDoubleSpinBox()
+        self.spin_blind_turn1.setRange(0.1, 10.0)
+        self.spin_blind_turn1.setValue(2.0)
+        self.spin_blind_turn1.setSingleStep(0.1)
+        self.spin_blind_turn1.setSuffix(" s")
+        self.spin_blind_turn1.valueChanged.connect(self._on_blind_turn1_changed)
+
+        lbl_pause_turn1 = QLabel("⏸️ Dừng dập đà 1:")
+        lbl_pause_turn1.setStyleSheet("color: #a9b1d6; font-size: 11px;")
+        self.spin_pause_turn1 = QDoubleSpinBox()
+        self.spin_pause_turn1.setRange(0.0, 5.0)
+        self.spin_pause_turn1.setValue(0.5)
+        self.spin_pause_turn1.setSingleStep(0.1)
+        self.spin_pause_turn1.setSuffix(" s")
+        self.spin_pause_turn1.valueChanged.connect(self._on_pause_turn1_changed)
+
+        row_mission_params.addWidget(lbl_delay_turn1)
+        row_mission_params.addWidget(self.spin_delay_turn1)
+        row_mission_params.addWidget(lbl_blind_turn1)
+        row_mission_params.addWidget(self.spin_blind_turn1)
+        row_mission_params.addWidget(lbl_pause_turn1)
+        row_mission_params.addWidget(self.spin_pause_turn1)
+        grp_mission_layout.addLayout(row_mission_params)
+
+        # Hàng 2: Dừng T2, Xoay trái mù T2, Dừng dập đà T2
+        row_mission_params_2 = QHBoxLayout()
+        row_mission_params_2.setSpacing(6)
+
+        lbl_delay_turn2 = QLabel("⏱️ Dừng T2:")
         lbl_delay_turn2.setStyleSheet("color: #a9b1d6; font-size: 11px;")
         self.spin_delay_turn2 = QDoubleSpinBox()
-        self.spin_delay_turn2.setRange(0.0, 10.0)
-        self.spin_delay_turn2.setValue(3.0)
+        self.spin_delay_turn2.setRange(0.0, 5.0)
+        self.spin_delay_turn2.setValue(1.0)
         self.spin_delay_turn2.setSingleStep(0.1)
         self.spin_delay_turn2.setSuffix(" s")
         self.spin_delay_turn2.valueChanged.connect(self._on_delay_turn2_changed)
 
-        lbl_confirm_frames = QLabel("🎯 Frame:")
-        lbl_confirm_frames.setStyleSheet("color: #a9b1d6; font-size: 11px;")
-        self.spin_confirm_frames = QSpinBox()
-        self.spin_confirm_frames.setRange(1, 10)
-        self.spin_confirm_frames.setValue(1)
-        self.spin_confirm_frames.setSingleStep(1)
-        self.spin_confirm_frames.setSuffix(" f")
-        self.spin_confirm_frames.valueChanged.connect(self._on_confirm_frames_changed)
+        lbl_blind_turn2 = QLabel("↩️ Xoay trái mù:")
+        lbl_blind_turn2.setStyleSheet("color: #a9b1d6; font-size: 11px;")
+        self.spin_blind_turn2 = QDoubleSpinBox()
+        self.spin_blind_turn2.setRange(0.1, 10.0)
+        self.spin_blind_turn2.setValue(2.0)
+        self.spin_blind_turn2.setSingleStep(0.1)
+        self.spin_blind_turn2.setSuffix(" s")
+        self.spin_blind_turn2.valueChanged.connect(self._on_blind_turn2_changed)
 
-        row_mission_params_2.addWidget(lbl_delay_turn1)
-        row_mission_params_2.addWidget(self.spin_delay_turn1)
+        lbl_pause_turn2 = QLabel("⏸️ Dừng dập đà 2:")
+        lbl_pause_turn2.setStyleSheet("color: #a9b1d6; font-size: 11px;")
+        self.spin_pause_turn2 = QDoubleSpinBox()
+        self.spin_pause_turn2.setRange(0.0, 5.0)
+        self.spin_pause_turn2.setValue(0.5)
+        self.spin_pause_turn2.setSingleStep(0.1)
+        self.spin_pause_turn2.setSuffix(" s")
+        self.spin_pause_turn2.valueChanged.connect(self._on_pause_turn2_changed)
+
         row_mission_params_2.addWidget(lbl_delay_turn2)
         row_mission_params_2.addWidget(self.spin_delay_turn2)
-        row_mission_params_2.addWidget(lbl_confirm_frames)
-        row_mission_params_2.addWidget(self.spin_confirm_frames)
-
+        row_mission_params_2.addWidget(lbl_blind_turn2)
+        row_mission_params_2.addWidget(self.spin_blind_turn2)
+        row_mission_params_2.addWidget(lbl_pause_turn2)
+        row_mission_params_2.addWidget(self.spin_pause_turn2)
         grp_mission_layout.addLayout(row_mission_params_2)
 
-        self.chk_calib_turn2 = QCheckBox("🎯 Chế độ Calib T2 (Xoay xong dừng hẳn, không bắt luống)")
-        self.chk_calib_turn2.setChecked(True)
+        self.chk_calib_turn2 = QCheckBox("🎯 Chế độ Calib T2 (Xoay xong dừng hẳn để xem đầu xe)")
+        self.chk_calib_turn2.setChecked(False)
         self.chk_calib_turn2.setStyleSheet("color: #ff9e64; font-weight: bold; font-size: 11px;")
         self.chk_calib_turn2.stateChanged.connect(self._on_calib_turn2_changed)
         grp_mission_layout.addWidget(self.chk_calib_turn2)
 
-        self.btn_reset_mission = QPushButton("🔄 Reset Thủ Công (Dự phòng)")
+        self.btn_reset_mission = QPushButton("🔄 Reset Nhiệm Vụ (Chạy lại từ đầu luống 1)")
         self.btn_reset_mission.setStyleSheet("""
             QPushButton {
                 background-color: #24283b;
@@ -1173,27 +1169,24 @@ class CombinedRobotApp(QMainWindow):
                             self.statusBar().showMessage("🔄 Đã reset nhiệm vụ từ công tắc tay cầm Kênh 5 (Auto_Forward OFF)", 3000)
 
             self.qr_mission.is_enabled = self.chk_mission_enabled.isChecked() if hasattr(self, "chk_mission_enabled") else True
+            if hasattr(self, "spin_qr_nav_thresh"):
+                self.qr_mission.min_qr_nav_dim = float(self.spin_qr_nav_thresh.value())
             if hasattr(self, "spin_qr_stop_thresh"):
                 self.qr_mission.min_stop_qr_dim = float(self.spin_qr_stop_thresh.value())
-            if hasattr(self, "spin_align_tol"):
-                self.qr_mission.align_tolerance_px = float(self.spin_align_tol.value())
-            if hasattr(self, "spin_path_seek_tol"):
-                self.qr_mission.path_seek_tolerance_px = float(self.spin_path_seek_tol.value())
-            if hasattr(self, "spin_path_seek_angle"):
-                self.qr_mission.path_seek_max_angle_deg = float(self.spin_path_seek_angle.value())
             if hasattr(self, "spin_delay_turn1"):
-                self.qr_mission.delay_turn1_sec = float(self.spin_delay_turn1.value())
+                self.qr_mission.stop_delay_t1_sec = float(self.spin_delay_turn1.value())
+            if hasattr(self, "spin_blind_turn1"):
+                self.qr_mission.blind_turn1_sec = float(self.spin_blind_turn1.value())
+            if hasattr(self, "spin_pause_turn1"):
+                self.qr_mission.pause_turn1_sec = float(self.spin_pause_turn1.value())
             if hasattr(self, "spin_delay_turn2"):
-                self.qr_mission.delay_turn2_sec = float(self.spin_delay_turn2.value())
-            if hasattr(self, "spin_confirm_frames"):
-                self.qr_mission.confirm_frames = int(self.spin_confirm_frames.value())
-                self.qr_mission.min_path_confirm_frames = int(self.spin_confirm_frames.value())
+                self.qr_mission.stop_delay_t2_sec = float(self.spin_delay_turn2.value())
+            if hasattr(self, "spin_blind_turn2"):
+                self.qr_mission.blind_turn2_sec = float(self.spin_blind_turn2.value())
+            if hasattr(self, "spin_pause_turn2"):
+                self.qr_mission.pause_turn2_sec = float(self.spin_pause_turn2.value())
             if hasattr(self, "chk_calib_turn2"):
                 self.qr_mission.calib_turn2_stop_only = self.chk_calib_turn2.isChecked()
-            if self.qr_mission.state == QRTurnMissionState.TURNING_LEFT_SEEK_TURN2:
-                if hasattr(self, "qr_detector") and hasattr(self.qr_detector, "last_decoded_text"):
-                    if self.qr_detector.last_decoded_text and "TURN_1" in self.qr_detector.last_decoded_text.upper():
-                        self.qr_detector.last_decoded_text = "TURN_2"
             fused_nav = self.qr_mission.process(
                 base_nav=fused_nav,
                 qr_results=qr_results,
@@ -1207,7 +1200,15 @@ class CombinedRobotApp(QMainWindow):
         # 3.3 Vẽ Vectơ lệch tâm và điểm mục tiêu lái
         if fused_nav.target_pt:
             tx, ty = fused_nav.target_pt
-            if fused_nav.is_qr_mode:
+            if fused_nav.mode_name == "RUN_STRAIGHT":
+                # Chế độ chạy thẳng (bỏ luống)
+                cv2.circle(vis_frame, (cam_cx, ty), 8, (0, 255, 0), -1)
+                cv2.circle(vis_frame, (cam_cx, ty), 16, (0, 255, 255), 2)
+                if self.chk_show_offset.isChecked():
+                    badge_str = "🚀 CHAY THANG (offset = 0 px)"
+                    cv2.putText(vis_frame, badge_str, (max(10, cam_cx - 120), max(25, ty - 12)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2, cv2.LINE_AA)
+            elif fused_nav.is_qr_mode:
                 # Chế độ dẫn hướng theo tâm QR (> 100x100 hoặc nhiệm vụ QR)
                 cv2.circle(vis_frame, (tx, ty), 10, (255, 0, 255), -1)
                 cv2.circle(vis_frame, (tx, ty), 18, (0, 255, 255), 2)
@@ -1245,7 +1246,17 @@ class CombinedRobotApp(QMainWindow):
                 self.lbl_mission_status.setStyleSheet("color: #7aa2f7; font-size: 12px;")
 
         # Cập nhật Telemetry trên giao diện
-        if fused_nav.is_qr_mode:
+        if fused_nav.mode_name == "RUN_STRAIGHT":
+            self.lbl_active_nav_source.setText("Mục tiêu hiện tại: 🚀 CHẠY THẲNG (Bỏ luống, offset = 0)")
+            self.lbl_active_nav_source.setStyleSheet("color: #7aa2f7; font-size: 13px; font-weight: bold;")
+            self.lbl_fusion_status.setText(f"Chế độ: 🚀 {fused_nav.mission_status_desc or 'Chạy thẳng [B4=0]'}")
+            self.lbl_fusion_status.setStyleSheet("color: #7dcfff; font-size: 12px; font-weight: bold;")
+            self.lbl_line_state.setText("Trạng thái: 🚀 CHẠY THẲNG (offset = 0 px)")
+            self.lbl_line_state.setStyleSheet("color: #00E676; font-weight: bold; font-size: 15px;")
+            self.lbl_line_offset.setText("Độ lệch tâm: 0.0 px (Giữ thẳng cố định)")
+            self.lbl_steering_action.setText("Lệnh lái: GIỮ THẲNG CỐ ĐỊNH (offset = 0.0)")
+            self.lbl_steering_action.setStyleSheet("color: #00E676; font-weight: bold; font-size: 13px;")
+        elif fused_nav.is_qr_mode:
             self.lbl_active_nav_source.setText(f"Mục tiêu hiện tại: 🎯 TÂM MÃ QR ({fused_nav.mode_name})")
             self.lbl_active_nav_source.setStyleSheet("color: #bb9af7; font-size: 13px; font-weight: bold;")
             
@@ -1282,23 +1293,25 @@ class CombinedRobotApp(QMainWindow):
 
             # Tính toán hướng lái đề xuất
             if fused_nav.mission_state == QRTurnMissionState.COMPLETED_STOPPED.value:
-                self.lbl_steering_action.setText(f"🛑 LỆNH LÁI: DỪNG HOÀN TẤT [B4={fused_nav.uart_flag_byte}] (Đã xoay {self.qr_mission.delay_turn2_sec:.1f}s để kiểm tra đầu xe)")
+                self.lbl_steering_action.setText(f"🛑 LỆNH LÁI: DỪNG CALIB HOÀN TẤT [B4=1]")
                 self.lbl_steering_action.setStyleSheet("color: #00E676; font-weight: bold; font-size: 13px;")
-            elif fused_nav.mission_state == QRTurnMissionState.APPROACHING_TURN2.value:
-                if fused_nav.uart_flag_byte == 2:
-                    self.lbl_steering_action.setText("⏸️ LỆNH LÁI: TẠM DỪNG 500MS TRIỆT TIÊU QUÁN TÍNH")
-                    self.lbl_steering_action.setStyleSheet("color: #ff9e64; font-weight: bold; font-size: 13px;")
-                else:
-                    self.lbl_steering_action.setText(f"🚀 LỆNH LÁI: TIẾN THEO TÂM TURN_2 ({fused_nav.offset_direction})")
-                    self.lbl_steering_action.setStyleSheet("color: #7dcfff; font-weight: bold; font-size: 13px;")
-            elif fused_nav.mission_state == QRTurnMissionState.STOP_AT_TURN1.value or (fused_nav.uart_flag_byte == 1 and fused_nav.mode_name == "TURN1_STATION"):
-                self.lbl_steering_action.setText("🛑 LỆNH LÁI: GỬI B4=1 ĐẾN TRẠM TURN_1 (STM32 tự dừng 1s & xoay)")
+            elif fused_nav.mission_state in (QRTurnMissionState.STOP_AT_QR1.value, QRTurnMissionState.STOP_AT_QR2.value) or (fused_nav.uart_flag_byte == 1 and fused_nav.mode_name == "STATION_STOP"):
+                self.lbl_steering_action.setText(f"🛑 LỆNH LÁI: DỪNG TRẠM QR [B4=1] ({fused_nav.mission_status_desc})")
                 self.lbl_steering_action.setStyleSheet("color: #ff5555; font-weight: bold; font-size: 13px;")
-            elif fused_nav.mission_state == QRTurnMissionState.TURNING_LEFT_SEEK_TURN2.value and fused_nav.uart_flag_byte != 2:
-                self.lbl_steering_action.setText(f"↩️ LỆNH LÁI: STM32 ĐANG QUAY TRÁI TÌM TURN_2 ({fused_nav.offset_direction})")
+            elif fused_nav.mission_state in (QRTurnMissionState.PAUSE_AFTER_TURN1.value, QRTurnMissionState.PAUSE_AFTER_TURN2.value):
+                self.lbl_steering_action.setText(f"⏸️ LỆNH LÁI: DỪNG DẬP QUÁN TÍNH 500MS [B4=1]")
+                self.lbl_steering_action.setStyleSheet("color: #ff9e64; font-weight: bold; font-size: 13px;")
+            elif fused_nav.uart_flag_byte == 2 or fused_nav.mission_state == QRTurnMissionState.BLIND_TURN_RIGHT.value:
+                self.lbl_steering_action.setText(f"↪️ LỆNH LÁI: XOAY PHẢI MÙ 2S [B4=2] ({fused_nav.mission_status_desc})")
+                self.lbl_steering_action.setStyleSheet("color: #ff9e64; font-weight: bold; font-size: 13px;")
+            elif fused_nav.uart_flag_byte == 3 or fused_nav.mission_state == QRTurnMissionState.BLIND_TURN_LEFT.value:
+                self.lbl_steering_action.setText(f"↩️ LỆNH LÁI: XOAY TRÁI MÙ 2S [B4=3] ({fused_nav.mission_status_desc})")
                 self.lbl_steering_action.setStyleSheet("color: #bb9af7; font-weight: bold; font-size: 13px;")
+            elif fused_nav.mission_state == QRTurnMissionState.TRACKING_QR2.value:
+                self.lbl_steering_action.setText(f"🚀 LỆNH LÁI: TIẾN THEO TÂM TURN_2 ({fused_nav.offset_direction})")
+                self.lbl_steering_action.setStyleSheet("color: #7dcfff; font-weight: bold; font-size: 13px;")
             elif fused_nav.qr_stop_triggered:
-                self.lbl_steering_action.setText("🛑 LỆNH LÁI: DỪNG ROBOT (Trạm dừng QR > 200 px)")
+                self.lbl_steering_action.setText("🛑 LỆNH LÁI: DỪNG ROBOT (Trạm dừng QR >= 200 px)")
                 self.lbl_steering_action.setStyleSheet("color: #ff5555; font-weight: bold; font-size: 13px;")
             else:
                 deg = abs(fused_nav.lateral_offset_px) / (fw * 0.5) * 15.0 if fused_nav.lateral_offset_px else 0.0
@@ -1375,10 +1388,10 @@ class CombinedRobotApp(QMainWindow):
             pkt_txt = self.uart.last_sent_packet or ""
             if hasattr(self, "lbl_uart_info"):
                 flag_str_map = {
-                    0: "0 (TIẾN / DỪNG XOAY)",
-                    1: "1 (TRẠM DỪNG / KHÓA PHANH)",
-                    2: "2 (TÂM DỪNG 500MS)",
-                    3: "3 (XOAY TRÁI T2)"
+                    0: "0 (TIẾN / BÁM ĐƯỜNG)",
+                    1: "1 (PHANH DỪNG XE)",
+                    2: "2 (XOAY PHẢI MÙ)",
+                    3: "3 (XOAY TRÁI MÙ)"
                 }
                 flag_str = flag_str_map.get(flag_val, f"{flag_val}")
                 self.lbl_uart_info.setText(f"UART [B4={flag_str}]: {pkt_txt.strip()[:24]}")
@@ -1392,7 +1405,7 @@ class CombinedRobotApp(QMainWindow):
                     self._calib_auto_stopped_uart = True
                     self._set_uart_enabled(False)
                     self.statusBar().showMessage(
-                        f"🛑 [CALIB T2] ĐÃ XOAY XONG {self.qr_mission.delay_turn2_sec:.1f}S: ĐÃ DỪNG HẲN & TỰ ĐỘNG KHÓA UART! BẤM 'RESET THỦ CÔNG' ĐỂ THỬ LẠI",
+                        f"🛑 [CALIB T2] ĐÃ HOÀN TẤT: ĐÃ DỪNG HẲN & TỰ ĐỘNG KHÓA UART! BẤM 'RESET NHIỆM VỤ' ĐỂ THỬ LẠI",
                         10000
                     )
 
@@ -1411,10 +1424,10 @@ class CombinedRobotApp(QMainWindow):
         qr_count = len([r for r in qr_results if r.is_decoded])
         qr_stat_short = f"QR: {qr_count} mã"
         stop_badge_map = {
-            0: "⚪ B4=0 (CHẠY / DỪNG XOAY)",
-            1: "🛑 B4=1 (TRẠM TURN_1 / DỪNG HẲN)",
-            2: "⏸️ B4=2 (DỪNG QUÁN TÍNH)",
-            3: "↩️ B4=3 (XOAY TRÁI TÌM ĐƯỜNG)"
+            0: "⚪ B4=0 (TIẾN / PID)",
+            1: "🛑 B4=1 (PHANH DỪNG)",
+            2: "↪️ B4=2 (XOAY PHẢI MÙ)",
+            3: "↩️ B4=3 (XOAY TRÁI MÙ)"
         }
         stop_badge = stop_badge_map.get(fused_nav.uart_flag_byte, f"B4={fused_nav.uart_flag_byte}")
         hud_txt = f"ROBOT AGV HUD | {line_stat_short} ({fused_nav.offset_direction}) | {stop_badge} | {qr_stat_short} | FPS: {fps_current:.1f}"
@@ -1633,11 +1646,29 @@ class CombinedRobotApp(QMainWindow):
 
     def _on_delay_turn1_changed(self, val: float):
         if hasattr(self, "qr_mission") and self.qr_mission:
+            self.qr_mission.stop_delay_t1_sec = float(val)
+
+    def _on_blind_turn1_changed(self, val: float):
+        if hasattr(self, "qr_mission") and self.qr_mission:
+            self.qr_mission.blind_turn1_sec = float(val)
             self.qr_mission.delay_turn1_sec = float(val)
+
+    def _on_pause_turn1_changed(self, val: float):
+        if hasattr(self, "qr_mission") and self.qr_mission:
+            self.qr_mission.pause_turn1_sec = float(val)
 
     def _on_delay_turn2_changed(self, val: float):
         if hasattr(self, "qr_mission") and self.qr_mission:
+            self.qr_mission.stop_delay_t2_sec = float(val)
+
+    def _on_blind_turn2_changed(self, val: float):
+        if hasattr(self, "qr_mission") and self.qr_mission:
+            self.qr_mission.blind_turn2_sec = float(val)
             self.qr_mission.delay_turn2_sec = float(val)
+
+    def _on_pause_turn2_changed(self, val: float):
+        if hasattr(self, "qr_mission") and self.qr_mission:
+            self.qr_mission.pause_turn2_sec = float(val)
 
     def _on_confirm_frames_changed(self, val: int):
         if hasattr(self, "qr_mission") and self.qr_mission:
