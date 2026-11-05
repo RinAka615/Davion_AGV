@@ -131,11 +131,22 @@ class QRDetector:
                 if crop.size == 0 or crop.shape[0] < 24 or crop.shape[1] < 24:
                     continue
 
-                # Kiểm tra đặc trưng tương phản đen-trắng của bảng QR (ngưỡng thích ứng với vệt nhòe quang học khi quay gắt)
-                gray_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-                p95, p5 = np.percentile(gray_crop, [95, 5])
-                if float(np.std(gray_crop)) < 18.0 or (p95 - p5) < 48.0 or p95 < 110.0:
+                # Kiểm tra đặc trưng tương phản đen-trắng và nền bảng trắng của mã QR (loại bỏ lá cây/cỏ chói nắng)
+                inner = frame[max(0, y1):min(h_f, y2), max(0, x1):min(w_f, x2)]
+                if inner.size == 0 or inner.shape[0] < 16 or inner.shape[1] < 16:
                     continue
+                gray_inner = cv2.cvtColor(inner, cv2.COLOR_BGR2GRAY).astype(np.float32)
+                p85_in, p15_in = np.percentile(gray_inner, [85, 15])
+                if float(np.std(gray_inner)) < 14.0 or (p85_in - p15_in) < 35.0 or p85_in < 145.0 or p15_in > 165.0:
+                    continue
+                bright_mask = gray_inner >= np.percentile(gray_inner, 60)
+                if np.any(bright_mask):
+                    b_in = inner[:, :, 0].astype(np.float32)[bright_mask]
+                    g_in = inner[:, :, 1].astype(np.float32)[bright_mask]
+                    r_in = inner[:, :, 2].astype(np.float32)[bright_mask]
+                    # Loại bỏ vùng lá cây xanh chói nắng (G vượt trội so với B và R)
+                    if float(np.mean(g_in - b_in)) > 26.0 or float(np.mean(g_in - r_in)) > 16.0:
+                        continue
 
                 decoded_from_roi = None
                 if HAS_ZXING:
@@ -149,6 +160,21 @@ class QRDetector:
                                 decoded_from_roi = b.text.strip()
                                 self.last_decoded_text = decoded_from_roi
                                 break
+                        # Nếu nắng gắt làm lóa mảnh nét đen của QR ngoài trời -> Phân ngưỡng cao + Erode làm đậm nét đen
+                        if not decoded_from_roi:
+                            up_gray = cv2.cvtColor(up, cv2.COLOR_BGR2GRAY)
+                            k_erode = np.ones((3, 3), np.uint8)
+                            for th_val in (215, 232, 195):
+                                _, th_img = cv2.threshold(up_gray, th_val, 255, cv2.THRESH_BINARY)
+                                er_img = cv2.erode(th_img, k_erode, iterations=1)
+                                bs_er = zxingcpp.read_barcodes(er_img, formats=self.zxing_formats, try_rotate=True)
+                                for b in bs_er:
+                                    if b.valid and b.text and b.text.strip():
+                                        decoded_from_roi = b.text.strip()
+                                        self.last_decoded_text = decoded_from_roi
+                                        break
+                                if decoded_from_roi:
+                                    break
                     except Exception:
                         pass
 
@@ -161,8 +187,8 @@ class QRDetector:
                 geom = compute_qr_geometry(pts_ordered)
                 dewarped = cv2.resize(crop, (160, 160)) if self.enable_dewarp else None
 
-                # Nếu giải mã được từ ROI làm nét HOẶC xác suất AI YOLO-Fastest V2 cao (đang quay nhòe)
-                if decoded_from_roi or q_conf >= 0.48:
+                # Nếu giải mã được từ ROI làm nét HOẶC xác suất AI YOLO-Fastest V2 cao (đang quay nhòe / nắng gắt)
+                if decoded_from_roi or q_conf >= 0.42:
                     if decoded_from_roi:
                         qr_text = decoded_from_roi
                     elif self.last_decoded_text and "TURN_1" not in self.last_decoded_text.upper():

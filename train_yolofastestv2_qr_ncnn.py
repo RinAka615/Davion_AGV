@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Tự động trích xuất dữ liệu mã QR khi đang quay (Motion-Blurred QR) + Lối đi bạt đen từ record-.mp4,
+Tự động trích xuất dữ liệu Lối đi bạt đen (Channel 0) + Mã QR thực địa & khi đang quay (Channel 1)
+từ robot_record_20261105_133306.mp4, 124600.mp4, 131851.mp4, 011534.mp4, 104137.mp4,
 kết hợp với tập dữ liệu đa góc độ/ánh sáng (datasets/batden_multi_angle_v3),
 huấn luyện mô hình 2-nhiệm-vụ YOLO-Fastest V2 (Channel 0: Bạt đen, Channel 1: Mã QR)
 và lượng tử hóa tĩnh sang NCNN INT8 (models/yolo_fastestv2_int8.param & .bin).
@@ -9,6 +10,7 @@ và lượng tử hóa tĩnh sang NCNN INT8 (models/yolo_fastestv2_int8.param & 
 import glob
 import os
 import random
+import re
 import subprocess
 import time
 import cv2
@@ -18,6 +20,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import zxingcpp
+
+from prepare_record1_dataset import (
+    de_overlay_outdoor_frame,
+    get_133306_path_poly,
+    get_124600_path_poly,
+    main as build_base_dataset,
+)
 
 try:
     os.nice(15)
@@ -40,11 +49,103 @@ np.random.seed(SEED)
 torch.manual_seed(SEED)
 
 
+def interp_box(keyframes, idx: int):
+    """Nội suy tuyến tính bounding box (x1, y1, x2, y2) giữa các keyframe."""
+    if idx < keyframes[0][0] or idx > keyframes[-1][0]:
+        return None
+    for i in range(len(keyframes) - 1):
+        f0, x1_0, y1_0, x2_0, y2_0 = keyframes[i]
+        f1, x1_1, y1_1, x2_1, y2_1 = keyframes[i + 1]
+        if f0 <= idx <= f1:
+            t = float(idx - f0) / max(1.0, float(f1 - f0))
+            return (
+                int(round((1 - t) * x1_0 + t * x1_1)),
+                int(round((1 - t) * y1_0 + t * y1_1)),
+                int(round((1 - t) * x2_0 + t * x2_1)),
+                int(round((1 - t) * y2_0 + t * y2_1)),
+            )
+    return None
+
+
+def get_133306_qr_box(idx: int):
+    """
+    Trả về tọa độ (x1, y1, x2, y2) chuẩn xác của bảng QR1 (F:180..436) và QR2 (F:480..842)
+    trong video thực địa robot_record_20261105_133306.mp4 (từ tâm (cx, cy) và kích thước (w, h)).
+    """
+    qr1_kf = [
+        (180, 485, 135, 45, 48),
+        (220, 502, 142, 50, 54),
+        (260, 522, 155, 56, 60),
+        (300, 555, 165, 64, 68),
+        (340, 595, 175, 72, 76),
+        (355, 635, 205, 80, 84),
+        (370, 638, 295, 92, 96),
+        (385, 598, 335, 104, 108),
+        (400, 610, 355, 118, 124),
+        (415, 610, 465, 142, 150),
+        (430, 600, 470, 165, 175),
+        (436, 390, 475, 165, 175),
+    ]
+    qr2_kf = [
+        (480, 458, 65, 38, 40),
+        (505, 415, 71, 40, 42),
+        (530, 515, 92, 44, 46),
+        (560, 565, 66, 46, 48),
+        (590, 506, 88, 50, 52),
+        (620, 445, 72, 58, 62),
+        (650, 380, 75, 72, 78),
+        (660, 365, 75, 80, 88),
+        (680, 315, 88, 92, 100),
+        (690, 278, 150, 104, 110),
+        (700, 510, 150, 110, 116),
+        (705, 580, 152, 112, 118),
+        (720, 568, 245, 118, 126),
+        (735, 572, 375, 140, 150),
+        (750, 545, 422, 175, 185),
+        (760, 485, 480, 205, 215),
+        (780, 445, 520, 250, 260),
+        (800, 415, 530, 260, 270),
+        (820, 445, 525, 260, 270),
+        (830, 645, 525, 265, 275),
+        (842, 1080, 535, 270, 280),
+    ]
+    for kf in (qr1_kf, qr2_kf):
+        if kf[0][0] <= idx <= kf[-1][0]:
+            for i in range(len(kf) - 1):
+                if kf[i][0] <= idx <= kf[i + 1][0]:
+                    t = float(idx - kf[i][0]) / max(1.0, float(kf[i + 1][0] - kf[i][0]))
+                    cx = (1.0 - t) * kf[i][1] + t * kf[i + 1][1]
+                    cy = (1.0 - t) * kf[i][2] + t * kf[i + 1][2]
+                    w = (1.0 - t) * kf[i][3] + t * kf[i + 1][3]
+                    h = (1.0 - t) * kf[i][4] + t * kf[i + 1][4]
+                    return (
+                        int(round(cx - w / 2.0)),
+                        int(round(cy - h / 2.0)),
+                        int(round(cx + w / 2.0)),
+                        int(round(cy + h / 2.0)),
+                    )
+    return None
+
+
+def get_124600_qr_box(idx: int):
+    """Tọa độ bảng QR ngoài trời trong video robot_record_20261105_124600.mp4 (F:310..444)."""
+    qr_kf = [
+        (310, 535, 105, 615, 200),
+        (320, 525, 118, 616, 224),
+        (340, 496, 202, 622, 342),
+        (360, 468, 286, 628, 462),
+        (380, 546, 315, 712, 498),
+        (400, 624, 344, 796, 535),
+        (420, 622, 378, 804, 580),
+        (444, 620, 412, 812, 625),
+    ]
+    return interp_box(qr_kf, idx)
+
+
 def clean_hud_and_green_overlay(frame: np.ndarray) -> np.ndarray:
-    """Khử thanh HUD phía trên (y < 44) và bất kỳ khung xanh lá/cyan overlay nào trong video record-.mp4."""
+    """Khử thanh HUD phía trên (y < 44)."""
     h, w = frame.shape[:2]
     f = frame.copy()
-    # Khử thanh HUD trên cùng
     f[:44, :] = cv2.inpaint(
         f[:60, :],
         np.vstack([np.ones((44, w), np.uint8) * 255, np.zeros((16, w), np.uint8)]),
@@ -54,216 +155,287 @@ def clean_hud_and_green_overlay(frame: np.ndarray) -> np.ndarray:
     return f
 
 
-def extract_record_dash_data():
+def write_poly_label(lbl_path: str, poly, w: int = 1280, h: int = 720):
+    if poly is None or len(poly) < 3:
+        with open(lbl_path, "w", encoding="utf-8") as f:
+            f.write("")
+    else:
+        coords = []
+        for x, y in poly:
+            nx = np.clip(float(x) / float(w), 0.0, 1.0)
+            ny = np.clip(float(y) / float(h), 0.0, 1.0)
+            coords.append(f"{nx:.6f} {ny:.6f}")
+        with open(lbl_path, "w", encoding="utf-8") as f:
+            f.write("0 " + " ".join(coords) + "\n")
+
+
+def extract_all_multitask_data():
     """
-    Quét các video record-.mp4, record2.mp4, record3.mp4 & line_qr.mp4 để trích xuất:
-    1) Các khung hình chứa mã QR khi đang quay tốc độ cao (bị nhòe chuyển động ngang, nghiêng, chói sáng)
-    2) Các khung hình âm tính (không có bạt, hoặc góc phòng)
-    Lưu ảnh vào datasets/batden_multi_angle_v3/images/{train,val}
-    và lưu mask QR vào datasets/batden_multi_angle_v3/qr_masks/{train,val}.
+    Xây dựng bộ dữ liệu đa nhiệm (Path + QR) từ:
+    1) robot_record_20261105_133306.mp4 (Thực địa: Luống 1, QR1, Luống 2, QR2, Luống 3 + Lá cây chói nắng âm tính)
+    2) robot_record_20261105_124600.mp4 (Thực địa: Luống bạt nắng gắt + QR ngoài trời)
+    3) robot_record_20261103_011534.mp4 (record-.mp4: QR nhòe chuyển động khi đang quay)
+    4) robot_record_20261102_104137.mp4 (record_1.mp4: Bạt + QR1 + QR2 trong nhà)
     """
-    import json
+    if not os.path.exists(os.path.join(DATASET_DIR, "images", "train")):
+        print("[INIT] Đang khởi tạo tập dữ liệu nền batden_multi_angle_v3...")
+        build_base_dataset()
+
     os.makedirs(QR_MASK_DIR_TRAIN, exist_ok=True)
     os.makedirs(QR_MASK_DIR_VAL, exist_ok=True)
 
-    # 1. Trích xuất từ record-.mp4
-    cap = cv2.VideoCapture(os.path.join(WORKSPACE, "record-.mp4"))
-    frames = []
-    while True:
-        ret, f = cap.read()
-        if not ret:
-            break
-        frames.append(f)
-    cap.release()
-    print(f"[DATA] Đã nạp {len(frames)} frames từ record-.mp4")
-
-    # Mẫu template chuẩn của bảng QR
-    t1 = cv2.cvtColor(frames[67][378:462, 106:210], cv2.COLOR_BGR2GRAY)
-    t2 = cv2.cvtColor(frames[91][352:442, 745:838], cv2.COLOR_BGR2GRAY)
-    t3 = cv2.cvtColor(frames[99][355:450, 995:1092], cv2.COLOR_BGR2GRAY)
-    t4 = cv2.cvtColor(frames[565][372:492, 1085:1202], cv2.COLOR_BGR2GRAY)
-    templates = [t1, t2, t3, t4]
-
-    qr_patches_bgr = [
-        frames[67][375:465, 104:212].copy(),
-        frames[91][350:444, 743:840].copy(),
-        frames[99][353:452, 993:1094].copy(),
-        frames[565][370:494, 1083:1204].copy(),
-    ]
-
+    qr_patches_bgr = []
     added_qr_train = 0
     added_qr_val = 0
 
-    for idx in range(0, len(frames), 2):
-        f = frames[idx]
-        roi_lower = f[300:, :]
-        b, g, r = roi_lower[:, :, 0].astype(np.int16), roi_lower[:, :, 1].astype(np.int16), roi_lower[:, :, 2].astype(np.int16)
-        has_cyan_overlay = np.sum((b - r > 55) & (g - r > 45) & (b > 95)) > 1500
-        has_green_box = np.sum((g > 230) & (r < 30) & (b < 30)) > 200
-        if has_cyan_overlay or has_green_box:
-            continue
+    # =========================================================================
+    # 1. TRÍCH XUẤT QR1 & QR2 THỰC ĐỊA TỪ robot_record_20261105_133306.mp4
+    # =========================================================================
+    v133306 = os.path.join(WORKSPACE, "output_qr/recordings/robot_record_20261105_133306.mp4")
+    if os.path.exists(v133306):
+        cap = cv2.VideoCapture(v133306)
+        fr_133306 = []
+        while True:
+            ret, f = cap.read()
+            if not ret:
+                break
+            fr_133306.append(f)
+        cap.release()
+        print(f"[DATA] Đã nạp {len(fr_133306)} frames từ robot_record_20261105_133306.mp4")
 
-        gray = cv2.cvtColor(f[270:570, :], cv2.COLOR_BGR2GRAY)
-        best_val = 0.0
-        best_box = None
-        for tmpl in templates:
-            th, tw = tmpl.shape[:2]
-            for scale in [0.85, 0.95, 1.0, 1.08, 1.18]:
-                rw, rh = int(tw * scale), int(th * scale)
-                if rw > gray.shape[1] or rh > gray.shape[0]:
-                    continue
-                rt = cv2.resize(tmpl, (rw, rh))
-                res = cv2.matchTemplate(gray, rt, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                if max_val > best_val:
-                    best_val = max_val
-                    best_box = (max_loc[0], max_loc[1] + 270, rw, rh)
+        # Lưu các mẫu patch QR thực địa ngoài trời (cả QR1 trên gạch đỏ và QR2 trên chân sắt)
+        for p_idx in [260, 340, 380, 400, 415, 430, 680, 700, 720, 740, 760, 780, 800, 820]:
+            box = get_133306_qr_box(p_idx)
+            if box is not None and p_idx < len(fr_133306):
+                x1, y1, x2, y2 = box
+                clean_p = de_overlay_outdoor_frame(fr_133306[p_idx])
+                patch = clean_p[max(0, y1 - 4):min(720, y2 + 4), max(0, x1 - 4):min(1280, x2 + 4)].copy()
+                if patch.size > 0:
+                    qr_patches_bgr.append(patch)
 
-        if best_val >= 0.62 and best_box is not None:
-            clean_f = clean_hud_and_green_overlay(f)
-            h_f, w_f = clean_f.shape[:2]
-            bx, by, bw, bh = best_box
+        # Lấy mẫu dày cho mọi khung hình có QR1 (180..436) và QR2 (480..842)
+        for idx in range(180, 843, 3):
+            if idx >= len(fr_133306):
+                break
+            box = get_133306_qr_box(idx)
+            if box is None:
+                continue
+            x1, y1, x2, y2 = box
+            raw_f = fr_133306[idx]
+            clean_f = de_overlay_outdoor_frame(raw_f)
+            poly = get_133306_path_poly(idx)
 
-            qr_mask = np.zeros((h_f, w_f), dtype=np.uint8)
-            cv2.rectangle(qr_mask, (bx, by), (bx + bw, by + bh), 255, -1)
-
-            img_320 = cv2.resize(clean_f, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_LINEAR)
+            qr_mask = np.zeros((720, 1280), dtype=np.uint8)
+            cv2.rectangle(qr_mask, (x1, y1), (x2, y2), 255, -1)
             qr_320 = cv2.resize(qr_mask, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_NEAREST)
 
-            split = "val" if (idx % 12 == 0) else "train"
-            name = f"recdash_qr_f{idx:03d}"
-            img_out = os.path.join(DATASET_DIR, "images", split, f"{name}.jpg")
-            lbl_out = os.path.join(DATASET_DIR, "labels", split, f"{name}.txt")
-            qr_out = os.path.join(DATASET_DIR, "qr_masks", split, f"{name}.png")
+            split = "val" if (idx % 15 == 0) else "train"
+            for tag, frame_src in [("clean", clean_f), ("raw", raw_f)]:
+                name = f"out133306_qr_{tag}_f{idx:04d}"
+                img_320 = cv2.resize(frame_src, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_AREA)
+                cv2.imwrite(os.path.join(DATASET_DIR, "images", split, f"{name}.jpg"), img_320)
+                write_poly_label(os.path.join(DATASET_DIR, "labels", split, f"{name}.txt"), poly, 1280, 720)
+                cv2.imwrite(os.path.join(DATASET_DIR, "qr_masks", split, f"{name}.png"), qr_320)
+                if split == "train":
+                    added_qr_train += 1
+                else:
+                    added_qr_val += 1
 
-            cv2.imwrite(img_out, img_320)
-            with open(lbl_out, "w") as lf:
-                pass
-            cv2.imwrite(qr_out, qr_320)
+        # Bổ sung mẫu âm tính (Hard Negative cho cả Path và QR) ở giai đoạn quay đầu xe trên cỏ/đất (F:300..440 & F:665..965)
+        for idx in list(range(300, 440, 5)) + list(range(665, 965, 5)):
+            if idx >= len(fr_133306):
+                break
+            raw_f = fr_133306[idx]
+            clean_f = de_overlay_outdoor_frame(raw_f)
+            box = get_133306_qr_box(idx)
+            qr_mask = np.zeros((720, 1280), dtype=np.uint8)
+            if box is not None:
+                cv2.rectangle(qr_mask, (box[0], box[1]), (box[2], box[3]), 255, -1)
+            qr_320 = cv2.resize(qr_mask, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_NEAREST)
+            split = "val" if (idx % 25 == 0) else "train"
+            for tag, frame_src in [("clean", clean_f), ("raw", raw_f)]:
+                name = f"out133306_hn_{tag}_f{idx:04d}"
+                img_320 = cv2.resize(frame_src, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_AREA)
+                cv2.imwrite(os.path.join(DATASET_DIR, "images", split, f"{name}.jpg"), img_320)
+                write_poly_label(os.path.join(DATASET_DIR, "labels", split, f"{name}.txt"), None, 1280, 720)
+                cv2.imwrite(os.path.join(DATASET_DIR, "qr_masks", split, f"{name}.png"), qr_320)
 
+    # =========================================================================
+    # 2. TRÍCH XUẤT QR THỰC ĐỊA TỪ robot_record_20261105_124600.mp4
+    # =========================================================================
+    v124600 = os.path.join(WORKSPACE, "output_qr/recordings/robot_record_20261105_124600.mp4")
+    if os.path.exists(v124600):
+        cap = cv2.VideoCapture(v124600)
+        fr_124600 = []
+        while True:
+            ret, f = cap.read()
+            if not ret:
+                break
+            fr_124600.append(f)
+        cap.release()
+        for p_idx in [320, 360, 400, 440]:
+            box = get_124600_qr_box(p_idx)
+            if box is not None and p_idx < len(fr_124600):
+                x1, y1, x2, y2 = box
+                qr_patches_bgr.append(fr_124600[p_idx][y1:y2, x1:x2].copy())
+
+        for idx in range(310, 445, 4):
+            if idx >= len(fr_124600):
+                break
+            box = get_124600_qr_box(idx)
+            if box is None:
+                continue
+            x1, y1, x2, y2 = box
+            clean_f = de_overlay_outdoor_frame(fr_124600[idx])
+            poly = get_124600_path_poly(idx)
+            qr_mask = np.zeros((720, 1280), dtype=np.uint8)
+            cv2.rectangle(qr_mask, (x1, y1), (x2, y2), 255, -1)
+            img_320 = cv2.resize(clean_f, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_AREA)
+            qr_320 = cv2.resize(qr_mask, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_NEAREST)
+
+            split = "val" if (idx % 20 == 0) else "train"
+            name = f"out124600_qr_f{idx:04d}"
+            cv2.imwrite(os.path.join(DATASET_DIR, "images", split, f"{name}.jpg"), img_320)
+            write_poly_label(os.path.join(DATASET_DIR, "labels", split, f"{name}.txt"), poly, 1280, 720)
+            cv2.imwrite(os.path.join(DATASET_DIR, "qr_masks", split, f"{name}.png"), qr_320)
             if split == "train":
                 added_qr_train += 1
             else:
                 added_qr_val += 1
 
-    # 2. Trích xuất từ record2.mp4 (Quay tốc độ cao)
-    r2_lbl_file = "/home/rinaka/.gemini/antigravity/brain/addb9986-787f-42ef-919c-ddbe26beb407/scratch/r2_labels.json"
-    if os.path.exists(r2_lbl_file) and os.path.exists(os.path.join(WORKSPACE, "record2.mp4")):
-        r2_lbls = json.load(open(r2_lbl_file))
-        cap2 = cv2.VideoCapture(os.path.join(WORKSPACE, "record2.mp4"))
-        fr2 = []
+    # =========================================================================
+    # 3. TRÍCH XUẤT QR KHI ĐANG QUAY TỪ robot_record_20261103_011534.mp4 (record-.mp4)
+    # =========================================================================
+    recdash_path = os.path.join(WORKSPACE, "output_qr/recordings/robot_record_20261103_011534.mp4")
+    if os.path.exists(recdash_path):
+        cap = cv2.VideoCapture(recdash_path)
+        frames = []
         while True:
-            ret, f = cap2.read()
-            if not ret: break
-            fr2.append(f)
-        cap2.release()
-        print(f"[DATA] Đã nạp {len(fr2)} frames từ record2.mp4")
+            ret, f = cap.read()
+            if not ret:
+                break
+            frames.append(f)
+        cap.release()
+        print(f"[DATA] Đã nạp {len(frames)} frames từ {recdash_path}")
 
-        # Thêm patch từ record2
-        if len(fr2) > 38:
-            qr_patches_bgr.append(fr2[38][340:430, 1100:1210].copy())
+        if len(frames) > 565:
+            t1 = cv2.cvtColor(frames[67][378:462, 106:210], cv2.COLOR_BGR2GRAY)
+            t2 = cv2.cvtColor(frames[91][352:442, 745:838], cv2.COLOR_BGR2GRAY)
+            t3 = cv2.cvtColor(frames[99][355:450, 995:1092], cv2.COLOR_BGR2GRAY)
+            t4 = cv2.cvtColor(frames[565][372:492, 1085:1202], cv2.COLOR_BGR2GRAY)
+            templates = [t1, t2, t3, t4]
 
-        for k_str, v in r2_lbls.items():
-            f_idx = int(k_str)
-            if f_idx >= len(fr2): continue
-            score = v[4]
-            src_type = v[5]
-            if src_type == "seed" or score >= 0.58:
-                f = fr2[f_idx]
-                clean_f = clean_hud_and_green_overlay(f)
-                h_f, w_f = clean_f.shape[:2]
-                x1, y1, x2, y2 = max(0, v[0]), max(0, v[1]), min(w_f, v[2]), min(h_f, v[3])
-                if (x2 - x1) < 28 or (y2 - y1) < 28: continue
+            qr_patches_bgr.extend([
+                frames[67][375:465, 104:212].copy(),
+                frames[91][350:444, 743:840].copy(),
+                frames[99][353:452, 993:1094].copy(),
+                frames[565][370:494, 1083:1204].copy(),
+            ])
 
-                qr_mask = np.zeros((h_f, w_f), dtype=np.uint8)
-                cv2.rectangle(qr_mask, (x1, y1), (x2, y2), 255, -1)
+            for idx in range(0, len(frames), 3):
+                f = frames[idx]
+                roi_lower = f[300:, :]
+                b, g, r = roi_lower[:, :, 0].astype(np.int16), roi_lower[:, :, 1].astype(np.int16), roi_lower[:, :, 2].astype(np.int16)
+                has_cyan_overlay = np.sum((b - r > 55) & (g - r > 45) & (b > 95)) > 1500
+                has_green_box = np.sum((g > 230) & (r < 30) & (b < 30)) > 200
+                if has_cyan_overlay or has_green_box:
+                    continue
 
-                img_320 = cv2.resize(clean_f, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_LINEAR)
-                qr_320 = cv2.resize(qr_mask, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_NEAREST)
+                gray = cv2.cvtColor(f[270:570, :], cv2.COLOR_BGR2GRAY)
+                best_val = 0.0
+                best_box = None
+                for tmpl in templates:
+                    th, tw = tmpl.shape[:2]
+                    for scale in [0.85, 1.0, 1.15]:
+                        rw, rh = int(tw * scale), int(th * scale)
+                        if rw > gray.shape[1] or rh > gray.shape[0]:
+                            continue
+                        rt = cv2.resize(tmpl, (rw, rh))
+                        res = cv2.matchTemplate(gray, rt, cv2.TM_CCOEFF_NORMED)
+                        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                        if max_val > best_val:
+                            best_val = max_val
+                            best_box = (max_loc[0], max_loc[1] + 270, rw, rh)
 
-                split = "val" if (f_idx % 10 == 0) else "train"
-                name = f"rec2_qr_f{f_idx:03d}"
-                cv2.imwrite(os.path.join(DATASET_DIR, "images", split, f"{name}.jpg"), img_320)
-                with open(os.path.join(DATASET_DIR, "labels", split, f"{name}.txt"), "w") as lf:
-                    pass
-                cv2.imwrite(os.path.join(DATASET_DIR, "qr_masks", split, f"{name}.png"), qr_320)
+                if best_val >= 0.62 and best_box is not None:
+                    clean_f = clean_hud_and_green_overlay(f)
+                    h_f, w_f = clean_f.shape[:2]
+                    bx, by, bw, bh = best_box
+                    qr_mask = np.zeros((h_f, w_f), dtype=np.uint8)
+                    cv2.rectangle(qr_mask, (bx, by), (bx + bw, by + bh), 255, -1)
 
-                if split == "train": added_qr_train += 1
-                else: added_qr_val += 1
+                    img_320 = cv2.resize(clean_f, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_LINEAR)
+                    qr_320 = cv2.resize(qr_mask, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_NEAREST)
 
-    # 3. Trích xuất từ record3.mp4 (Quay tốc độ cao)
-    r3_lbl_file = "/home/rinaka/.gemini/antigravity/brain/addb9986-787f-42ef-919c-ddbe26beb407/scratch/r3_labels.json"
-    if os.path.exists(r3_lbl_file) and os.path.exists(os.path.join(WORKSPACE, "record3.mp4")):
-        r3_lbls = json.load(open(r3_lbl_file))
-        cap3 = cv2.VideoCapture(os.path.join(WORKSPACE, "record3.mp4"))
-        fr3 = []
-        while True:
-            ret, f = cap3.read()
-            if not ret: break
-            fr3.append(f)
-        cap3.release()
-        print(f"[DATA] Đã nạp {len(fr3)} frames từ record3.mp4")
+                    split = "val" if (idx % 15 == 0) else "train"
+                    name = f"recdash_qr_f{idx:03d}"
+                    cv2.imwrite(os.path.join(DATASET_DIR, "images", split, f"{name}.jpg"), img_320)
+                    write_poly_label(os.path.join(DATASET_DIR, "labels", split, f"{name}.txt"), None)
+                    cv2.imwrite(os.path.join(DATASET_DIR, "qr_masks", split, f"{name}.png"), qr_320)
+                    if split == "train":
+                        added_qr_train += 1
+                    else:
+                        added_qr_val += 1
 
-        for k_str, v in r3_lbls.items():
-            f_idx = int(k_str)
-            if f_idx >= len(fr3): continue
-            # lấy các frame cách nhau 2 để tránh trùng lặp
-            if f_idx % 2 != 0: continue
-            f = fr3[f_idx]
-            clean_f = clean_hud_and_green_overlay(f)
-            h_f, w_f = clean_f.shape[:2]
-            x1, y1, x2, y2 = max(0, v[0]), max(0, v[1]), min(w_f, v[2]), min(h_f, v[3])
-            if (x2 - x1) < 28 or (y2 - y1) < 28: continue
-
-            qr_mask = np.zeros((h_f, w_f), dtype=np.uint8)
-            cv2.rectangle(qr_mask, (x1, y1), (x2, y2), 255, -1)
-
-            img_320 = cv2.resize(clean_f, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_LINEAR)
-            qr_320 = cv2.resize(qr_mask, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_NEAREST)
-
-            split = "val" if (f_idx % 8 == 0) else "train"
-            name = f"rec3_qr_f{f_idx:03d}"
-            cv2.imwrite(os.path.join(DATASET_DIR, "images", split, f"{name}.jpg"), img_320)
-            with open(os.path.join(DATASET_DIR, "labels", split, f"{name}.txt"), "w") as lf:
-                pass
-            cv2.imwrite(os.path.join(DATASET_DIR, "qr_masks", split, f"{name}.png"), qr_320)
-
-            if split == "train": added_qr_train += 1
-            else: added_qr_val += 1
-
-    # Tự động đồng bộ qr_masks cho các ảnh cũ
+    # =========================================================================
+    # 4. ĐỒNG BỘ MẶT NẠ QR CHO TẤT CẢ ẢNH TRONG DATASET
+    # =========================================================================
     for split in ["train", "val"]:
         img_dir = os.path.join(DATASET_DIR, "images", split)
         qr_dir = os.path.join(DATASET_DIR, "qr_masks", split)
         for img_path in sorted(glob.glob(os.path.join(img_dir, "*.jpg"))):
             base = os.path.splitext(os.path.basename(img_path))[0]
             qr_out = os.path.join(qr_dir, f"{base}.png")
+
+            qr_m = np.zeros((IMG_SIZE, IMG_SIZE), dtype=np.uint8)
+            # Nếu là ảnh từ 133306 (không biến đổi xoay/lật), luôn cập nhật đúng tọa độ QR thực địa
+            m133306 = re.match(r"^out133306_(?:clean|raw|neg_clean|neg_raw|qr_clean|qr_raw)_f(\d+)$", base)
+            if m133306:
+                f_idx = int(m133306.group(1))
+                box = get_133306_qr_box(f_idx)
+                if box is not None:
+                    x1, y1, x2, y2 = box
+                    sx, sy = IMG_SIZE / 1280.0, IMG_SIZE / 720.0
+                    cv2.rectangle(
+                        qr_m,
+                        (int(x1 * sx), int(y1 * sy)),
+                        (int(x2 * sx), int(y2 * sy)),
+                        255,
+                        -1,
+                    )
+                cv2.imwrite(qr_out, qr_m)
+                continue
+
             if os.path.exists(qr_out):
                 continue
-            img = cv2.imread(img_path)
-            if img is None:
+
+            # Nếu là ảnh biến thể aug từ 133306 hoặc 124600 ở vùng không có QR -> mask rỗng
+            if base.startswith("out133306_") or base.startswith("out124600_"):
+                cv2.imwrite(qr_out, qr_m)
                 continue
-            qr_m = np.zeros((IMG_SIZE, IMG_SIZE), dtype=np.uint8)
-            try:
-                bs = zxingcpp.read_barcodes(img, try_rotate=True, try_downscale=True, return_errors=True)
-                for b in bs:
-                    p = b.position
-                    if p.top_left.x != 0 or p.bottom_right.x != 0:
-                        pts = np.array(
-                            [
-                                [p.top_left.x, p.top_left.y],
-                                [p.top_right.x, p.top_right.y],
-                                [p.bottom_right.x, p.bottom_right.y],
-                                [p.bottom_left.x, p.bottom_left.y],
-                            ],
-                            dtype=np.int32,
-                        )
-                        cv2.fillPoly(qr_m, [pts], 255)
-            except Exception:
-                pass
+
+            img = cv2.imread(img_path)
+            if img is not None:
+                try:
+                    bs = zxingcpp.read_barcodes(img, try_rotate=True, try_downscale=True, return_errors=True)
+                    for b in bs:
+                        p = b.position
+                        if p.top_left.x != 0 or p.bottom_right.x != 0:
+                            pts = np.array(
+                                [
+                                    [p.top_left.x, p.top_left.y],
+                                    [p.top_right.x, p.top_right.y],
+                                    [p.bottom_right.x, p.bottom_right.y],
+                                    [p.bottom_left.x, p.bottom_left.y],
+                                ],
+                                dtype=np.int32,
+                            )
+                            cv2.fillPoly(qr_m, [pts], 255)
+                except Exception:
+                    pass
             cv2.imwrite(qr_out, qr_m)
 
-    print(f"[DATA] Tổng cộng đã tích hợp: {added_qr_train} ảnh Train QR & {added_qr_val} ảnh Val QR (từ record-, record2, record3)")
+    print(f"[DATA] Đã tích hợp thêm {added_qr_train} ảnh Train QR & {added_qr_val} ảnh Val QR | Số mẫu QR patch: {len(qr_patches_bgr)}")
     return qr_patches_bgr
 
 
@@ -410,30 +582,27 @@ class MultiTaskPathQRDataset(Dataset):
             qr_mask = np.zeros((IMG_SIZE, IMG_SIZE), dtype=np.uint8)
 
         if self.augment:
-            # Tăng cường Copy-Paste bảng QR bị nhòe chuyển động (Motion Blur khi xe đang quay)
-            if qr_mask.sum() == 0 and len(self.qr_patches) > 0 and random.random() < 0.45:
+            # Copy-Paste bảng QR (cả ngoài trời lẫn trong nhà) ở nhiều độ cao (từ y=5%..78%)
+            if qr_mask.sum() == 0 and len(self.qr_patches) > 0 and random.random() < 0.42:
                 patch = random.choice(self.qr_patches).copy()
-                # Kích thước QR trên ảnh 320x320 (tương ứng ~60px..180px trên ảnh 1280x720)
-                pw = random.randint(20, 56)
+                pw = random.randint(14, 58)
                 ph = int(pw * random.uniform(0.95, 1.25))
                 patch_resized = cv2.resize(patch, (pw, ph), interpolation=cv2.INTER_LINEAR)
 
-                # Mô phỏng nhòe chuyển động ngang khi xe đang xoay tốc độ cao (Horizontal Motion Blur)
-                if random.random() < 0.80:
-                    ksize = random.choice([3, 5, 7, 9, 11])
+                if random.random() < 0.65:
+                    ksize = random.choice([3, 5, 7, 9])
                     kernel_mb = np.zeros((ksize, ksize), dtype=np.float32)
                     kernel_mb[ksize // 2, :] = 1.0 / ksize
                     patch_resized = cv2.filter2D(patch_resized, -1, kernel_mb)
 
                 px = random.randint(4, IMG_SIZE - pw - 4)
-                py = random.randint(int(IMG_SIZE * 0.30), int(IMG_SIZE * 0.72) - ph)
+                py = random.randint(int(IMG_SIZE * 0.05), max(int(IMG_SIZE * 0.06), int(IMG_SIZE * 0.78) - ph))
                 img[py : py + ph, px : px + pw] = patch_resized
                 qr_mask[py : py + ph, px : px + pw] = 1
                 path_mask[py : py + ph, px : px + pw] = 0
 
-            # Nếu ảnh đã có QR thật từ record-.mp4 / record2 / record3, mô phỏng thêm nhòe chuyển động khi quay gắt
-            elif qr_mask.sum() > 0 and random.random() < 0.65:
-                ksize = random.choice([3, 5, 7, 9, 11])
+            elif qr_mask.sum() > 0 and random.random() < 0.45:
+                ksize = random.choice([3, 5, 7])
                 kernel_mb = np.zeros((ksize, ksize), dtype=np.float32)
                 kernel_mb[ksize // 2, :] = 1.0 / ksize
                 img = cv2.filter2D(img, -1, kernel_mb)
@@ -444,8 +613,8 @@ class MultiTaskPathQRDataset(Dataset):
                 qr_mask = cv2.flip(qr_mask, 1)
 
             if random.random() < 0.5:
-                alpha = random.uniform(0.75, 1.28)
-                beta = random.uniform(-25, 25)
+                alpha = random.uniform(0.78, 1.25)
+                beta = random.uniform(-22, 22)
                 img = np.clip(img.astype(np.float32) * alpha + beta, 0, 255).astype(np.uint8)
 
         rgb = np.ascontiguousarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), dtype=np.float32) / 255.0
@@ -455,22 +624,19 @@ class MultiTaskPathQRDataset(Dataset):
         return t_img, t_mask
 
 
-def multitask_loss(logits, targets, bce_fn, eps=1e-6):
-    # Channel 0: Path, Channel 1: QR (tăng trọng số cho QR vì diện tích bảng QR nhỏ hơn bạt)
-    bce_path = bce_fn(logits[:, 0:1], targets[:, 0:1])
-    bce_qr = bce_fn(logits[:, 1:2], targets[:, 1:2])
+def multitask_loss(logits, targets, bce_path_fn, bce_qr_fn, eps=1e-6):
+    bce_path = bce_path_fn(logits[:, 0:1], targets[:, 0:1])
+    bce_qr = bce_qr_fn(logits[:, 1:2], targets[:, 1:2])
 
     probs = torch.sigmoid(logits)
-    # Dice Path
     p0, t0 = probs[:, 0], targets[:, 0]
     dice_path = 1.0 - (2.0 * (p0 * t0).sum() + eps) / (p0.sum() + t0.sum() + eps)
-    # Dice QR
     p1, t1 = probs[:, 1], targets[:, 1]
     dice_qr = 1.0 - (2.0 * (p1 * t1).sum() + eps) / (p1.sum() + t1.sum() + eps)
 
     loss_path = 0.5 * bce_path + 0.5 * dice_path
     loss_qr = 0.4 * bce_qr + 0.6 * dice_qr
-    return loss_path + 1.2 * loss_qr
+    return loss_path + 1.3 * loss_qr
 
 
 def evaluate(model, val_loader):
@@ -481,12 +647,10 @@ def evaluate(model, val_loader):
             probs = torch.sigmoid(model(x))
             preds = (probs > 0.5).float()
             for i in range(x.size(0)):
-                # Path IoU
                 if y[i, 0].sum() > 0:
                     inter = (preds[i, 0] * y[i, 0]).sum().item()
                     union = ((preds[i, 0] + y[i, 0]) > 0).float().sum().item()
                     path_ious.append((inter + 1e-6) / (union + 1e-6))
-                # QR IoU
                 if y[i, 1].sum() > 0:
                     inter = (preds[i, 1] * y[i, 1]).sum().item()
                     union = ((preds[i, 1] + y[i, 1]) > 0).float().sum().item()
@@ -502,10 +666,9 @@ def main():
         os.nice(15)
     except Exception:
         pass
-    # Giới hạn 2 luồng CPU nhẹ nhàng để máy chạy êm ái
     torch.set_num_threads(2)
 
-    qr_patches = extract_record_dash_data()
+    qr_patches = extract_all_multitask_data()
 
     train_img_dir = os.path.join(DATASET_DIR, "images", "train")
     train_lbl_dir = os.path.join(DATASET_DIR, "labels", "train")
@@ -520,7 +683,6 @@ def main():
 
     model = YOLOFastestV2MultiTaskSeg(num_classes=2, export_mode=False)
 
-    # Nạp trọng số Backbone + Neck đã học từ bản trước (Transfer Learning) để hội tụ cực nhanh
     prev_pt = "/tmp/yolo_fastestv2_mt_fp32.pt" if os.path.exists("/tmp/yolo_fastestv2_mt_fp32.pt") else "/tmp/yolo_fastestv2_fp32.pt"
     if os.path.exists(prev_pt):
         try:
@@ -532,21 +694,17 @@ def main():
                 if k in new_sd and new_sd[k].shape == v.shape:
                     new_sd[k] = v.clone()
                     transferred += 1
-                elif k == "head.1.weight" and v.shape[0] == 1:
-                    new_sd[k][0:1] = v.clone()
-                    transferred += 1
-                elif k == "head.1.bias" and v.shape[0] == 1:
-                    new_sd[k][0:1] = v.clone()
-                    transferred += 1
             model.load_state_dict(new_sd)
             print(f"[TRANSFER] Đã kế thừa {transferred} tầng trọng số từ {prev_pt}!")
         except Exception as e:
             print("[WARN] Không nạp được checkpoint cũ:", e)
 
-    epochs = 24
-    optimizer = torch.optim.AdamW(model.parameters(), lr=2.8e-3, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-4)
-    bce_fn = nn.BCEWithLogitsLoss()
+    epochs = 16 if os.path.exists(prev_pt) else 28
+    lr_init = 1.5e-3 if os.path.exists(prev_pt) else 2.8e-3
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr_init, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=8e-5)
+    bce_path_fn = nn.BCEWithLogitsLoss()
+    bce_qr_fn = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([5.0]))
 
     best_score = 0.0
     best_path_iou = 0.0
@@ -554,7 +712,7 @@ def main():
     best_state = None
 
     print("=" * 70)
-    print(f"🚀 HUẤN LUYỆN YOLO-Fastest V2 MULTI-TASK (PATH + QR KHI QUAY)")
+    print(f"🚀 HUẤN LUYỆN YOLO-Fastest V2 MULTI-TASK (PATH + QR THỰC ĐỊA & KHI QUAY)")
     print(f"   Train: {len(train_ds)} ảnh | Val: {len(val_ds)} ảnh | Epochs: {epochs} (Low-CPU Mode)")
     print("=" * 70)
 
@@ -565,7 +723,7 @@ def main():
         for x, y in train_loader:
             optimizer.zero_grad()
             logits = model(x)
-            loss = multitask_loss(logits, y, bce_fn)
+            loss = multitask_loss(logits, y, bce_path_fn, bce_qr_fn)
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
@@ -588,7 +746,6 @@ def main():
 
     print(f"✔ Hoàn tất sau {time.time() - t0:.1f}s | Best Path mIoU: {best_path_iou*100:.2f}% | Best QR mIoU: {best_qr_iou*100:.2f}%")
 
-    # Xuất sang TorchScript FP32 -> PNNX -> NCNN INT8
     export_m = YOLOFastestV2MultiTaskSeg(num_classes=2, export_mode=True)
     export_m.load_state_dict(best_state)
     export_m.eval()
@@ -659,4 +816,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -368,7 +368,7 @@ class QRTurnMissionManager:
             turn1_stop_qr: Optional[QRDetectionResult] = None
             turn2_stop_qr: Optional[QRDetectionResult] = None
             for qr in qr_results:
-                if self.is_turn1_code(qr.text):
+                if self.is_turn1_code(qr.text) or (qr.backend == "yolo-fastestv2-qr" and not self.calib_turn2_stop_only):
                     exceeded, bw, bh, area = check_qr_exceeds_threshold(qr, min_dim=self.min_stop_qr_dim)
                     if exceeded:
                         turn1_stop_qr = qr
